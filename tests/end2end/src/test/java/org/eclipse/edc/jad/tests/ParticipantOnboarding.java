@@ -19,7 +19,6 @@ import org.eclipse.edc.jad.tests.model.ParticipantProfile;
 import org.eclipse.edc.spi.monitor.Monitor;
 
 import java.util.Arrays;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -217,12 +216,11 @@ public record ParticipantOnboarding(String participantName, String participantCo
     private void waitForCredentialIssuance(String participantContextId, String userToken, String holderPid) {
         await().atMost(20, SECONDS)
                 .pollInterval(1, SECONDS).until(() -> {
-                    var pcB64 = Base64.getUrlEncoder().encodeToString(participantContextId.getBytes());
                     var body = given()
                             .baseUri(IDENTITYHUB_BASE_URL)
                             .contentType("application/json")
                             .auth().oauth2(userToken)
-                            .get("/cs/api/identity/v1alpha/participants/%s/credentials/request/%s".formatted(pcB64, holderPid))
+                            .get("/cs/api/identity/v1alpha/participants/%s/credentials/request/%s".formatted(participantContextId, holderPid))
                             .then()
                             .log().ifValidationFails()
                             .statusCode(anyOf(equalTo(200), equalTo(204)))
