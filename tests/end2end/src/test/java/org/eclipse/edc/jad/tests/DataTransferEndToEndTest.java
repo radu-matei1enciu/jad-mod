@@ -328,7 +328,7 @@ public class DataTransferEndToEndTest {
                             "url": "http://dataplane.edc-v.svc.cluster.local:8083/api/control/v1/dataflows"
                         }
                         """)
-                .post("/api/mgmt/v4alpha/dataplanes/%s".formatted(participantContextId))
+                .post("/api/mgmt/v5alpha/dataplanes/%s".formatted(participantContextId))
                 .then()
                 .log().ifValidationFails()
                 .statusCode(204);
