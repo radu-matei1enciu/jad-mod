@@ -13,6 +13,7 @@ rsApi = "4.0.0"
 swagger = "2.2.47"
 jersey = "3.1.11"
 postgres = "42.7.10"
+opentelemetry = "2.26.1"
 
 [libraries]
 # upstream EDC dependencies
@@ -88,6 +89,7 @@ jakarta-rsApi = { module = "jakarta.ws.rs:jakarta.ws.rs-api", version.ref = "rsA
 jersey-multipart = { module = "org.glassfish.jersey.media:jersey-media-multipart", version.ref = "jersey" }
 postgres = { module = "org.postgresql:postgresql", version.ref = "postgres" }
 opentelemetry-exporter-otlp = { module = "io.opentelemetry:opentelemetry-exporter-otlp", version = "1.61.0" }
+opentelemetry-javaagent = { module = "io.opentelemetry.javaagent:opentelemetry-javaagent", version.ref = "opentelemetry" }
 
 [plugins]
 shadow = { id = "com.gradleup.shadow", version = "9.4.1" }

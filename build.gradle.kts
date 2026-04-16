@@ -13,7 +13,6 @@
  */
 
 import com.bmuschko.gradle.docker.tasks.image.DockerBuildImage
-import java.net.URI
 
 plugins {
     `java-library`
@@ -32,19 +31,16 @@ buildscript {
 val edcBuildId = libs.plugins.edc.build.get().pluginId
 val jadVersion: String by project
 
-val downloadOtelAgent by tasks.registering {
-    val outputFile = layout.buildDirectory.file("otel/opentelemetry-javaagent.jar")
-    outputs.file(outputFile)
-    doLast {
-        val url = URI("https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/latest/download/opentelemetry-javaagent.jar").toURL()
-        val destFile = outputFile.get().asFile
-        destFile.parentFile.mkdirs()
-        url.openStream().use { input ->
-            destFile.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        }
+val downloadOtelAgent by tasks.register("downloadOtelAgent", Copy::class) {
+    val openTelemetry = configurations.create("open-telemetry")
+
+    dependencies {
+        openTelemetry(libs.opentelemetry.javaagent)
     }
+
+    from(openTelemetry)
+    into("build/otel")
+    rename { "opentelemetry-javaagent.jar" }
 }
 
 allprojects {
@@ -70,6 +66,8 @@ subprojects {
                 from(rootProject.layout.buildDirectory.dir("otel"))
                 into(project.layout.buildDirectory.dir("otel"))
             }
+            var shadowJarTask = tasks.named("shadowJar").get();
+            shadowJarTask.dependsOn(copyOtelAgent)
 
             // configure the "dockerize" task
             val dockerTask: DockerBuildImage = tasks.create("dockerize", DockerBuildImage::class) {
@@ -87,7 +85,6 @@ subprojects {
                 inputDir.set(file(dockerContextDir))
             }
             dockerTask.dependsOn(tasks.named("shadowJar"))
-            dockerTask.dependsOn(copyOtelAgent)
         }
     }
 }
