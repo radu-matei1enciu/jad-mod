@@ -36,6 +36,13 @@ spec:
         - name: provision-manager
           image: ghcr.io/eclipse-cfm/cfm/pmanager:latest
           imagePullPolicy: Always
+          command: [ "/pmanager" ]
+          args: [
+            "--mode=debug"
+          ]
+          envFrom:
+            - configMapRef:
+                name: telemetry-config
           ports:
             - containerPort: 8080
           volumeMounts:

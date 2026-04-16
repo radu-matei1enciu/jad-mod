@@ -36,6 +36,13 @@ spec:
         - name: tenant-manager
           image: ghcr.io/eclipse-cfm/cfm/tmanager:latest
           imagePullPolicy: Always
+          command: [ "/tmanager" ]
+          args: [
+            "--mode=debug"
+          ]
+          envFrom:
+            - configMapRef:
+                name: telemetry-config
           ports:
             - containerPort: 8080
           volumeMounts:

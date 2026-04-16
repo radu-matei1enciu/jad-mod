@@ -12,6 +12,12 @@
 #
 
 resources:
-  - base/
-  - apps/
-
+  - edcv-namespace.yaml
+  - gateway-class.yaml
+  - gateway.yaml
+  - postgres.yaml
+  - nats.yaml
+  - keycloak.yaml
+  - vault.yaml
+  - jaeger.yaml
+  - prometheus.yaml
