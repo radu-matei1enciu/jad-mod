@@ -127,7 +127,7 @@ public class DataTransferEndToEndTest {
                 .auth().oauth2(accessToken)
                 .contentType("application/json")
                 .body(template)
-                .post("/api/mgmt/v5alpha/celexpressions")
+                .post("/api/mgmt/v5beta/celexpressions")
                 .then()
                 .statusCode(200);
     }
@@ -311,7 +311,7 @@ public class DataTransferEndToEndTest {
                             "url": "http://siglet.edc-v.svc.cluster.local:8081/api/v1/%s/dataflows"
                         }
                         """.formatted(participantContextId, participantContextId))
-                .post("/api/mgmt/v5alpha/dataplanes/%s".formatted(participantContextId))
+                .post("/api/mgmt/v5beta/dataplanes/%s".formatted(participantContextId))
                 .then()
                 .log().ifValidationFails()
                 .statusCode(204);
@@ -324,7 +324,7 @@ public class DataTransferEndToEndTest {
                 .auth().oauth2(accessToken)
                 .contentType("application/json")
                 .body(template)
-                .post("/api/mgmt/v5alpha/participants/%s/assets".formatted(participantContextId))
+                .post("/api/mgmt/v5beta/participants/%s/assets".formatted(participantContextId))
                 .then()
                 .statusCode(200)
                 .extract().jsonPath().getString(ID);
@@ -341,7 +341,7 @@ public class DataTransferEndToEndTest {
                 .auth().oauth2(accessToken)
                 .contentType("application/json")
                 .body(template)
-                .post("/api/mgmt/v5alpha/participants/%s/policydefinitions".formatted(participantContextId))
+                .post("/api/mgmt/v5beta/participants/%s/policydefinitions".formatted(participantContextId))
                 .then()
                 .statusCode(200)
                 .extract().jsonPath().getString(ID);
@@ -359,7 +359,7 @@ public class DataTransferEndToEndTest {
                 .auth().oauth2(accessToken)
                 .contentType("application/json")
                 .body(template)
-                .post("/api/mgmt/v5alpha/participants/%s/contractdefinitions".formatted(participantContextId))
+                .post("/api/mgmt/v5beta/participants/%s/contractdefinitions".formatted(participantContextId))
                 .then()
                 .statusCode(200)
                 .extract().jsonPath().getString(ID);

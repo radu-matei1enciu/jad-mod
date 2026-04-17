@@ -27,7 +27,7 @@ import static org.eclipse.edc.web.spi.exception.ServiceResultHandler.exceptionMa
 
 @Consumes(APPLICATION_JSON)
 @Produces(APPLICATION_JSON)
-@Path("/v5alpha/dataplanes")
+@Path("/v5beta/dataplanes")
 public class DataplaneRegistrationApiController {
 
     private final DataPlaneSelectorService dataPlaneSelectorService;
