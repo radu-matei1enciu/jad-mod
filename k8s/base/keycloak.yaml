@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: keycloak
-          image: quay.io/keycloak/keycloak:latest
+          image: quay.io/keycloak/keycloak@sha256:26ae26445475f7fac5f90ee138b1bdb64324f5815fb16133ffdbdb122d97c4d8
           args:
             - "start-dev"
             - "--health-enabled=true"

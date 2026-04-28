@@ -35,7 +35,7 @@ spec:
     spec:
       containers:
         - name: nats
-          image: nats:latest
+          image: nats@sha256:c9e19fc4f9d0b36f9d2da3175ce3c95220806d098c24d328feb869886ab4afef
           imagePullPolicy: IfNotPresent
           args:
             - "-c"

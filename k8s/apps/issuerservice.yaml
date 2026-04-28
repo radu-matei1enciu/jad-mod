@@ -34,7 +34,7 @@ spec:
     spec:
       containers:
         - name: issuerservice
-          image: ghcr.io/metaform/jad/issuerservice:latest
+          image: ghcr.io/metaform/jad/issuerservice@sha256:718c3a1646f954192345c39db13383af942f612267b317d78f002fa3b246c6e5
           imagePullPolicy: Always
           ports:
             - containerPort: 80

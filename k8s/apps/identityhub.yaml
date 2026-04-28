@@ -34,7 +34,7 @@ spec:
     spec:
       containers:
         - name: identityhub
-          image: ghcr.io/metaform/jad/identity-hub:latest
+          image: ghcr.io/metaform/jad/identity-hub@sha256:0e4bf0448d34be0c1190991739bebae6d22445b59011fd259d184dc978ded2b2
           imagePullPolicy: Always
           envFrom:
             - configMapRef:

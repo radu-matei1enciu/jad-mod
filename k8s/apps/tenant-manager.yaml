@@ -34,7 +34,7 @@ spec:
     spec:
       containers:
         - name: tenant-manager
-          image: ghcr.io/eclipse-cfm/cfm/tmanager:latest
+          image: ghcr.io/eclipse-cfm/cfm/tmanager@sha256:5ab536a933c7ba577e6894ae192e49298c930e22e55b2b911c56d17bea29e56d
           imagePullPolicy: Always
           command: [ "/tmanager" ]
           args: [

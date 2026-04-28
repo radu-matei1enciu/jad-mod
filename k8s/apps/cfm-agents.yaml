@@ -34,7 +34,7 @@ spec:
     spec:
       containers:
         - name: keycloak-agent
-          image: ghcr.io/eclipse-cfm/cfm/kcagent:latest
+          image: ghcr.io/eclipse-cfm/cfm/kcagent@sha256:ebc84e0d620842e546c43f9e31e5209ddb4103fa38b6bd1950c2d724c2460788
           imagePullPolicy: Always
           command: [ "/kcagent" ]
           args: [
@@ -48,7 +48,7 @@ spec:
               mountPath: /etc/appname
               readOnly: true
         - name: edcv-agent
-          image: ghcr.io/eclipse-cfm/cfm/edcvagent:latest
+          image: ghcr.io/eclipse-cfm/cfm/edcvagent@sha256:e38ded5242d18d4e3a59db76f84e16dd68693f44d0f387c7b918919b4254218a
           imagePullPolicy: Always
           command: [ "/edcvagent" ]
           args: [
@@ -62,7 +62,7 @@ spec:
               mountPath: /etc/appname
               readOnly: true
         - name: registration-agent
-          image: ghcr.io/eclipse-cfm/cfm/regagent:latest
+          image: ghcr.io/eclipse-cfm/cfm/regagent@sha256:60ad4008c88eefb836e50404bf656f952f7b817bba0aa468e8a68423c9eb949c
           imagePullPolicy: Always
           command: [ "/regagent" ]
           args: [
@@ -76,7 +76,7 @@ spec:
               mountPath: /etc/appname
               readOnly: true
         - name: onboarding-agent
-          image: ghcr.io/eclipse-cfm/cfm/obagent:latest
+          image: ghcr.io/eclipse-cfm/cfm/obagent@sha256:6f1950a9bccc5b6f7bfc05899da480cecdc716da57275100ce313db1b9baa866
           imagePullPolicy: Always
           command: [ "/obagent" ]
           args: [

@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: redline
-          image: ghcr.io/metaform/redline:latest
+          image: ghcr.io/metaform/redline@sha256:f9fb07634960981032b2f3bbf049d69030fb33b63012ce7f13806a448b9178af
           imagePullPolicy: Always
           ports:
             - containerPort: 8081

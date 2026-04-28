@@ -51,7 +51,7 @@ spec:
             name: siglet-config
       containers:
         - name: siglet
-          image: ghcr.io/eclipse-dataplane-core/dsdk-facet-rs/siglet:latest
+          image: ghcr.io/eclipse-dataplane-core/dsdk-facet-rs/siglet@sha256:cffcb461eedbff7b477671b5b60e1f3343762438155bd82fe7eaa545bb46c7e3
           imagePullPolicy: Always
           ports:
             - name: http
@@ -116,7 +116,7 @@ spec:
               cpu: "500m"
         # Vault Agent sidecar
         - name: vault-agent
-          image: hashicorp/vault:1.15.0
+          image: hashicorp/vault@sha256:ccbb5fde9d55b3dc57cf8694dea9c988ba0127b205661b652b5264f8d5901a58
           args:
             - "agent"
             - "-config=/vault/config/vault-agent-config.hcl"

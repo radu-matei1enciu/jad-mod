@@ -34,7 +34,7 @@ spec:
     spec:
       containers:
         - name: provision-manager
-          image: ghcr.io/eclipse-cfm/cfm/pmanager:latest
+          image: ghcr.io/eclipse-cfm/cfm/pmanager@sha256:02e483eb0ced971c5449f11de01897508aaf2707d3ccd1842c867d9d61d97bca
           imagePullPolicy: Always
           command: [ "/pmanager" ]
           args: [
