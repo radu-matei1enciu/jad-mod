@@ -84,11 +84,19 @@ spec:
                   "dataspaceSpec": {
                      "protocolStack": ["dsp-2025-1", "dcp-2025-1"],
                      "credentialSpecs": [{
-                        "type": "MembershipCredential",
+                        "type": "CatenaMembershipCredential",
                         "issuer": "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer",
                         "format": "VC2_0_JOSE",
-                        "id": "catena-x-credential-def"
+                        "id": "catena-membership-credential-def"
+                      },
+                      {
+                        "type": "CatenaManufacturerCredential",
+                        "issuer": "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer",
+                        "format": "VC2_0_JOSE",
+                        "id": "catena-manufacturer-credential-def",
+                        "role": "manufacturer"
                       }
+                    ]
                   }
                 }')
 
@@ -114,10 +122,17 @@ spec:
                   "dataspaceSpec": {
                      "protocolStack": ["dsp-2025-1", "dcp-2025-1"],
                      "credentialSpecs": [{
-                        "type": "MembershipCredential",
+                        "type": "BikeMembershipCredential",
                         "issuer": "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer",
                         "format": "VC2_0_JOSE",
-                        "id": "bike-x-credential-def"
+                        "id": "bike-membership-credential-def"
+                      },
+                      {
+                        "type": "BikeManufacturerCredential",
+                        "issuer": "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer",
+                        "format": "VC2_0_JOSE",
+                        "id": "bike-manufacturer-credential-def",
+                        "role": "manufacturer"
                       }
                     ]
                   }

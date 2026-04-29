@@ -24,7 +24,7 @@ metadata:
     platform: edcv
     type: edcv-job
 spec:
-  backoffLimit: 5
+  backoffLimit: 0 
   template:
     metadata:
       labels:
@@ -32,7 +32,7 @@ spec:
         platform: edcv
         type: edcv-job
     spec:
-      restartPolicy: OnFailure
+      restartPolicy: Never 
       initContainers:
         # Wait for issuerservice to be ready
         - name: wait-for-issuerservice
@@ -239,16 +239,16 @@ spec:
               echo "================================================"
 
               # Create credential definitions
-              echo "Creating Membership CredentialDefinition"
+              echo "Creating Catena Membership Credential Definition"
               curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "http://issuerservice.edc-v.svc.cluster.local:10013/api/admin/v1alpha/participants/issuer/credentialdefinitions" \
                 -H "Authorization: Bearer ${ISSUER_TOKEN}" \
                 -H "Content-Type: application/json" \
                 -d '{
                   "attestations": ["membership-attestation-def-1"],
-                  "credentialType": "MembershipCredential",
-                  "id": "membership-credential-def",
+                  "credentialType": "CatenaMembershipCredential",
+                  "id": "catena-membership-credential-def",
                   "jsonSchema": "{}",
-                  "jsonSchemaUrl": "https://example.com/schema/membership-credential.json",
+                  "jsonSchemaUrl": "https://example.com/schema/catena-membership-credential.json",
                   "mappings": [
                     {
                       "input": "membership",
@@ -276,16 +276,89 @@ spec:
                   "validity": "604800"
                 }'
               
-              echo "Creating Manufacturer CredentialDefinition"
+              echo "Creating Catena Manufacturer Credential Definition"
               curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "http://issuerservice.edc-v.svc.cluster.local:10013/api/admin/v1alpha/participants/issuer/credentialdefinitions" \
                 -H "Authorization: Bearer ${ISSUER_TOKEN}" \
                 -H "Content-Type: application/json" \
                 -d '{
                   "attestations": ["manufacturer-attestation-def-1"],
-                  "credentialType": "ManufacturerCredential",
-                  "id": "manufacturer-credential-def",
+                  "credentialType": "CatenaManufacturerCredential",
+                  "id": "catena-manufacturer-credential-def",
                   "jsonSchema": "{}",
-                  "jsonSchemaUrl": "https://example.com/schema/manufacturer-credential.json",
+                  "jsonSchemaUrl": "https://example.com/schema/catena-manufacturer-credential.json",
+                  "mappings": [
+                    {
+                      "input": "contractVersion",
+                      "output": "credentialSubject.contractVersion",
+                      "required": true
+                    },
+                    {
+                      "input": "component_types",
+                      "output": "credentialSubject.part_types",
+                      "required": "true"
+                    },
+                    {
+                      "input": "since",
+                      "output": "credentialSubject.since",
+                      "required": true
+                    },
+                    {
+                      "input": "id",
+                      "output": "credentialSubject.id",
+                      "required": true
+                    }
+                  ],
+                  "rules": [],
+                  "format": "VC2_0_JOSE",
+                  "validity": "604800"
+                }'
+
+              echo "Creating Bike Membership CredentialDefinition"
+              curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "http://issuerservice.edc-v.svc.cluster.local:10013/api/admin/v1alpha/participants/issuer/credentialdefinitions" \
+                -H "Authorization: Bearer ${ISSUER_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "attestations": ["membership-attestation-def-1"],
+                  "credentialType": "BikeMembershipCredential",
+                  "id": "bike-membership-credential-def",
+                  "jsonSchema": "{}",
+                  "jsonSchemaUrl": "https://example.com/schema/bike-membership-credential.json",
+                  "mappings": [
+                    {
+                      "input": "membership",
+                      "output": "credentialSubject.membership",
+                      "required": true
+                    },
+                    {
+                      "input": "membershipType",
+                      "output": "credentialSubject.membershipType",
+                      "required": "true"
+                    },
+                    {
+                      "input": "membershipStartDate",
+                      "output": "credentialSubject.membershipStartDate",
+                      "required": true
+                    },
+                    {
+                      "input": "id",
+                      "output": "credentialSubject.id",
+                      "required": true
+                    }
+                  ],
+                  "rules": [],
+                  "format": "VC2_0_JOSE",
+                  "validity": "604800"
+                }'
+              echo "Creating Bike Manufacturer CredentialDefinition"
+              curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "http://issuerservice.edc-v.svc.cluster.local:10013/api/admin/v1alpha/participants/issuer/credentialdefinitions" \
+                -H "Authorization: Bearer ${ISSUER_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "attestations": ["manufacturer-attestation-def-1"],
+                  "credentialType": "BikeManufacturerCredential",
+                  "id": "bike-manufacturer-credential-def",
+                  "jsonSchema": "{}",
+                  "jsonSchemaUrl": "https://example.com/schema/bike-manufacturer-credential.json",
                   "mappings": [
                     {
                       "input": "contractVersion",
