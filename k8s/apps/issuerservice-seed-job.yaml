@@ -210,27 +210,29 @@ spec:
                 exit 1
               fi
 
-              # Create attestation definitions
-              echo "Creating Membership AttestationDefinition"
+              # Create First attestation definitions
+              echo "Creating First Membership AttestationDefinition"
               curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "http://issuerservice.edc-v.svc.cluster.local:10013/api/admin/v1alpha/participants/issuer/attestations" \
                 -H "Authorization: Bearer ${ISSUER_TOKEN}" \
                 -H "Content-Type: application/json" \
                 -d '{
                   "attestationType": "membership",
                   "configuration": {},
-                  "id": "membership-attestation-def-1"
+                  "id": "membership-attestation-def-catena-x"
                 }'
               
-              echo "Creating Manufacturer AttestationDefinition"
+
+              # Create Second attestation definitions
+              echo "Creating Second Membership AttestationDefinition"
               curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "http://issuerservice.edc-v.svc.cluster.local:10013/api/admin/v1alpha/participants/issuer/attestations" \
                 -H "Authorization: Bearer ${ISSUER_TOKEN}" \
                 -H "Content-Type: application/json" \
                 -d '{
-                  "attestationType": "manufacturer",
+                  "attestationType": "membership",
                   "configuration": {},
-                  "id": "manufacturer-attestation-def-1"
+                  "id": "membership-attestation-def-bike-x"
                 }'
-
+              
               echo "✓ AttestationDefinitions created"
 
               echo ""
@@ -239,14 +241,14 @@ spec:
               echo "================================================"
 
               # Create credential definitions
-              echo "Creating Membership CredentialDefinition"
+              echo "Creating Catena-X CredentialDefinition"
               curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "http://issuerservice.edc-v.svc.cluster.local:10013/api/admin/v1alpha/participants/issuer/credentialdefinitions" \
                 -H "Authorization: Bearer ${ISSUER_TOKEN}" \
                 -H "Content-Type: application/json" \
                 -d '{
-                  "attestations": ["membership-attestation-def-1"],
+                  "attestations": ["membership-attestation-def-catena-x"],
                   "credentialType": "MembershipCredential",
-                  "id": "membership-credential-def",
+                  "id": "catena-x-credential-def",
                   "jsonSchema": "{}",
                   "jsonSchemaUrl": "https://example.com/schema/membership-credential.json",
                   "mappings": [
@@ -276,30 +278,30 @@ spec:
                   "validity": "604800"
                 }'
               
-              echo "Creating Manufacturer CredentialDefinition"
+              echo "Creating Bike-X CredentialDefinition"
               curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "http://issuerservice.edc-v.svc.cluster.local:10013/api/admin/v1alpha/participants/issuer/credentialdefinitions" \
                 -H "Authorization: Bearer ${ISSUER_TOKEN}" \
                 -H "Content-Type: application/json" \
                 -d '{
-                  "attestations": ["manufacturer-attestation-def-1"],
-                  "credentialType": "ManufacturerCredential",
-                  "id": "manufacturer-credential-def",
+                  "attestations": ["membership-attestation-def-bike-x"],
+                  "credentialType": "MembershipCredential",
+                  "id": "bike-x-credential-def",
                   "jsonSchema": "{}",
-                  "jsonSchemaUrl": "https://example.com/schema/manufacturer-credential.json",
+                  "jsonSchemaUrl": "https://example.com/schema/membership-credential.json",
                   "mappings": [
                     {
-                      "input": "contractVersion",
-                      "output": "credentialSubject.contractVersion",
+                      "input": "membership",
+                      "output": "credentialSubject.membership",
                       "required": true
                     },
                     {
-                      "input": "component_types",
-                      "output": "credentialSubject.part_types",
+                      "input": "membershipType",
+                      "output": "credentialSubject.membershipType",
                       "required": "true"
                     },
                     {
-                      "input": "since",
-                      "output": "credentialSubject.since",
+                      "input": "membershipStartDate",
+                      "output": "credentialSubject.membershipStartDate",
                       "required": true
                     },
                     {
@@ -312,6 +314,7 @@ spec:
                   "format": "VC2_0_JOSE",
                   "validity": "604800"
                 }'
+              
 
               echo "✓ CredentialDefinition created"
               echo ""

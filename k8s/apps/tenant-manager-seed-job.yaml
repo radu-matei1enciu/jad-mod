@@ -74,9 +74,9 @@ spec:
               CELL_ID=$(echo "$CELL_RESPONSE" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
               echo "Cell created with ID: $CELL_ID"
 
-              # Create Dataspace Profile
-              echo "Creating Dataspace Profile..."
-              PROFILE_RESPONSE=$(curl -s -X POST "$TM_BASE_URL/api/v1alpha1/dataspace-profiles" \
+              # Create First Dataspace Profile
+              echo "Creating First Dataspace Profile..."
+              FIRST_PROFILE_RESPONSE=$(curl -s -X POST "$TM_BASE_URL/api/v1alpha1/dataspace-profiles" \
                 -H "Content-Type: application/json" \
                 -d '{
                   "artifacts": [],
@@ -87,28 +87,51 @@ spec:
                         "type": "MembershipCredential",
                         "issuer": "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer",
                         "format": "VC2_0_JOSE",
-                        "id": "membership-credential-def"
-                      },
-                      {
-                        "type": "ManufacturerCredential",
+                        "id": "catena-x-credential-def"
+                      }
+                  }
+                }')
+
+              FIRST_DATASPACE_PROFILE_ID=$(echo "$FIRST_PROFILE_RESPONSE" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+              echo "Dataspace Profile created with ID: $FIRST_DATASPACE_PROFILE_ID"
+
+              # Deploy First Dataspace Profile
+              echo "Deploying First Dataspace Profile..."
+              curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "$TM_BASE_URL/api/v1alpha1/dataspace-profiles/$FIRST_DATASPACE_PROFILE_ID/deployments" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "profileId": "'"$FIRST_DATASPACE_PROFILE_ID"'",
+                  "cellId": "'"$CELL_ID"'"
+                }'
+
+              # Create Second Dataspace Profile
+              echo "Creating Second Dataspace Profile..."
+              SECOND_PROFILE_RESPONSE=$(curl -s -X POST "$TM_BASE_URL/api/v1alpha1/dataspace-profiles" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "artifacts": [],
+                  "properties": {},
+                  "dataspaceSpec": {
+                     "protocolStack": ["dsp-2025-1", "dcp-2025-1"],
+                     "credentialSpecs": [{
+                        "type": "MembershipCredential",
                         "issuer": "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer",
                         "format": "VC2_0_JOSE",
-                        "id": "manufacturer-credential-def",
-                        "role": "manufacturer"
+                        "id": "bike-x-credential-def"
                       }
                     ]
                   }
                 }')
 
-              DATASPACE_PROFILE_ID=$(echo "$PROFILE_RESPONSE" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-              echo "Dataspace Profile created with ID: $DATASPACE_PROFILE_ID"
+              SECOND_DATASPACE_PROFILE_ID=$(echo "$SECOND_PROFILE_RESPONSE" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+              echo "Second Dataspace Profile created with ID: $SECOND_DATASPACE_PROFILE_ID"
 
-              # Deploy Dataspace Profile
-              echo "Deploying Dataspace Profile..."
-              curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "$TM_BASE_URL/api/v1alpha1/dataspace-profiles/$DATASPACE_PROFILE_ID/deployments" \
+              # Deploy Second Dataspace Profile
+              echo "Deploying Second Dataspace Profile..."
+              curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "$TM_BASE_URL/api/v1alpha1/dataspace-profiles/$SECOND_DATASPACE_PROFILE_ID/deployments" \
                 -H "Content-Type: application/json" \
                 -d '{
-                  "profileId": "'"$DATASPACE_PROFILE_ID"'",
+                  "profileId": "'"$SECOND_DATASPACE_PROFILE_ID"'",
                   "cellId": "'"$CELL_ID"'"
                 }'
 

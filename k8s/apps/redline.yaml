@@ -48,6 +48,14 @@ spec:
             limits:
               memory: "1Gi"
               cpu: "1000m"
+          startupProbe:
+            httpGet:
+              path: /api/public/health
+              port: 8081
+            initialDelaySeconds: 40
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 18
           livenessProbe:
             httpGet:
               path: /api/public/health
