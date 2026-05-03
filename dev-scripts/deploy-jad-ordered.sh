@@ -286,7 +286,6 @@ wait_deployment "siglet"
 
 apply_file "$APPS_DIR/redline.yaml"
 wait_deployment "redline"
-wait_http "redline-health" "http://redline.edc-v.svc.cluster.local:8081/api/public/health"
 
 log "9/10 Seed jobs in dependency order"
 apply_seed_job "$APPS_DIR/issuerservice-seed-job.yaml" "issuerservice-seed"

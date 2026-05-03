@@ -63,6 +63,33 @@ spec:
               echo "Redline Seeding"
               echo "================================================"
 
+              TM_BASE_URL="http://tenant-manager.edc-v.svc.cluster.local:8080"
+  
+              echo "Resolving CFM dataspace profile IDs..."
+  
+              PROFILES_JSON=$(curl -sf "$TM_BASE_URL/api/v1alpha1/dataspace-profiles")
+  
+              echo "Tenant Manager profiles:"
+              echo "$PROFILES_JSON" | jq '.[] | {id: .id, name: .properties.name, properties: .properties}'
+  
+              CATENAX_PROFILE_ID=$(echo "$PROFILES_JSON" | jq -r '.[] | select(.properties.name == "Catena-X") | .id' | head -n 1)
+              BIKEX_PROFILE_ID=$(echo "$PROFILES_JSON" | jq -r '.[] | select(.properties.name == "Bike-X") | .id' | head -n 1)
+  
+              if [ -z "$CATENAX_PROFILE_ID" ] || [ "$CATENAX_PROFILE_ID" = "null" ]; then
+              echo "Could not resolve Catena-X CFM dataspace profile ID"
+              exit 1
+              fi
+  
+              if [ -z "$BIKEX_PROFILE_ID" ] || [ "$BIKEX_PROFILE_ID" = "null" ]; then
+              echo "Could not resolve Bike-X CFM dataspace profile ID"
+              exit 1
+              fi
+
+              echo "Catena-X CFM profile ID: $CATENAX_PROFILE_ID"
+              echo "Bike-X CFM profile ID: $BIKEX_PROFILE_ID"
+
+
+
               # Create Service Provider
               echo "Creating Service Provider..."
               SP_RESPONSE=$(curl -sf -X POST "$REDLINE_BASE_URL/service-providers" \
@@ -81,7 +108,9 @@ spec:
                 -d '{
                   "name": "Catena-X",
                   "properties": {
-                    "description": "A Demo Dataspace for JAD"
+                    "description": "A Demo Dataspace for JAD",
+                     "cfmDataspaceProfileId": "'"$CATENAX_PROFILE_ID"'",
+                     "credentialType": "CatenaMembershipCredential"
                   }
                 }')
               DATASPACE_ID=$(echo "$DATASPACE_RESPONSE" | jq -r '.id')
@@ -94,122 +123,13 @@ spec:
                   -d '{
                     "name": "Bike-X",
                     "properties": {
-                      "description": "A Mock Bicycle-Industry Dataspace"
+                      "description": "A Mock Bicycle-Industry Dataspace",
+                      "cfmDataspaceProfileId": "'"$BIKEX_PROFILE_ID"'",
+                      "credentialType": "BikeMembershipCredential"
                     }
                   }')
               BIKEX_ID=$(echo "$BIKEX_RESPONSE" | jq -r '.id')
               echo "Bike-X Dataspace $BIKEX_ID created successfully"
-              
-              # Create Tenant
-              echo "Seed Consumer Tenant"
-              TENANT_RESPONSE=$(curl -sf -X POST "$REDLINE_BASE_URL/service-providers/$SP_ID/tenants" \
-                -H "content-type: application/json" \
-                -d '{
-                  "tenantName": "Demo Consumer Company",
-                  "dataspaceInfos": [
-                    {
-                      "dataspaceId": '$DATASPACE_ID',
-                      "agreementTypes": [],
-                      "roles": []
-                    }
-                  ]
-                }')
-              
-              CONSUMER_TENANT_ID=$(echo "$TENANT_RESPONSE" | jq -r '.id')
-              echo "Tenant created with ID $CONSUMER_TENANT_ID"
-              CONSUMER_PARTICIPANT_ID=$(echo "$TENANT_RESPONSE" | jq -r '.participants[0].id')
-              
-              # Register Participant
-              echo "Deploy Participant $CONSUMER_PARTICIPANT_ID..."
-              curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "$REDLINE_BASE_URL/service-providers/$SP_ID/tenants/$CONSUMER_TENANT_ID/participants/$CONSUMER_PARTICIPANT_ID/deployments" \
-                -H "content-type: application/json" \
-                -d '{
-                  "participantId": '$CONSUMER_PARTICIPANT_ID',
-                  "identifier": "'"$CONSUMER_DID"'"
-                }'
-              
-              echo "Participant deployed. Waiting for participant to become ACTIVE."
-              
-              
-              # Wait for Participant to become ACTIVE
-              while true; do
-                result=$(curl -s -X GET "$REDLINE_BASE_URL/service-providers/$SP_ID/tenants/$CONSUMER_TENANT_ID/participants/$CONSUMER_PARTICIPANT_ID" | jq '[.agents[].state] | all(. == "ACTIVE")')
-                
-                if [ "$result" = "true" ]; then
-                     echo "All agents are ACTIVE"
-                     break
-                fi
-                     
-                echo "Waiting for all agents to become ACTIVE..."
-                sleep 10
-              done
-              
-              # Register data plane for consumer participant
-              curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "$REDLINE_BASE_URL/service-providers/$SP_ID/tenants/$CONSUMER_TENANT_ID/participants/$CONSUMER_PARTICIPANT_ID/dataplanes"
-
-             
-              # Create Provider Tenant
-              echo "Seed Provider Tenant"
-              TENANT_RESPONSE=$(curl -sf -X POST "$REDLINE_BASE_URL/service-providers/$SP_ID/tenants" \
-                -H "content-type: application/json" \
-                -d '{
-                  "tenantName": "Demo Provider Company",
-                  "dataspaceInfos": [
-                    {
-                      "dataspaceId": '$DATASPACE_ID',
-                      "agreementTypes": [],
-                      "roles": []
-                    }
-                  ]
-                }')
-              
-              PROVIDER_TENANT_ID=$(echo "$TENANT_RESPONSE" | jq -r '.id')
-              echo "Tenant created with ID $PROVIDER_TENANT_ID"
-              PROVIDER_PARTICIPANT_ID=$(echo "$TENANT_RESPONSE" | jq -r '.participants[0].id')
-              
-              # Register Participant
-              echo "Deploy Participant $PROVIDER_PARTICIPANT_ID..."
-              curl -sfS -w "\nHTTP_STATUS:%{http_code}\n"S -w "\nHTTP_STATUS:%{http_code}\n" -X POST "$REDLINE_BASE_URL/service-providers/$SP_ID/tenants/$PROVIDER_TENANT_ID/participants/$PROVIDER_PARTICIPANT_ID/deployments" \
-                -H "content-type: application/json" \
-                -d '{
-                  "participantId": '$PROVIDER_PARTICIPANT_ID',
-                  "identifier": "'"$PROVIDER_DID"'"
-                }'
-              
-              echo "Participant deployed. Waiting for participant to become ACTIVE."
-              
-              
-              # Wait for Participant to become ACTIVE
-              while true; do
-                result=$(curl -s -X GET "$REDLINE_BASE_URL/service-providers/$SP_ID/tenants/$PROVIDER_TENANT_ID/participants/$PROVIDER_PARTICIPANT_ID" | jq '[.agents[].state] | all(. == "ACTIVE")')
-              
-                if [ "$result" = "true" ]; then
-                     echo "All agents are ACTIVE"
-                     break
-                fi
-              
-                echo "Waiting for all agents to become ACTIVE..."
-                sleep 10
-              done
-              
-              # Register data plane for provider participant
-              curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "$REDLINE_BASE_URL/service-providers/$SP_ID/tenants/$PROVIDER_TENANT_ID/participants/$PROVIDER_PARTICIPANT_ID/dataplanes"
-              
-              # Register consumer and provider as partners
-              echo "Registering Partners..."
-              curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "$REDLINE_BASE_URL/service-providers/$SP_ID/tenants/$CONSUMER_TENANT_ID/participants/$CONSUMER_PARTICIPANT_ID/partners/$DATASPACE_ID" \
-                -H "content-type: application/json" \
-                -d '{
-                  "identifier": "'"$PROVIDER_DID"'",
-                  "nickname": "provider-partner"
-                }'
-              
-              curl -sfS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "$REDLINE_BASE_URL/service-providers/$SP_ID/tenants/$PROVIDER_TENANT_ID/participants/$PROVIDER_PARTICIPANT_ID/partners/$DATASPACE_ID" \
-                -H "content-type: application/json" \
-                -d '{
-                  "identifier": "'"$CONSUMER_DID"'",
-                  "nickname": "consumer-partner"
-                }'
               
               echo "================================================"
               echo "Redline Seeding Complete"
