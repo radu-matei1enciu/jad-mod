@@ -110,7 +110,8 @@ spec:
                   "properties": {
                     "description": "A Demo Dataspace for JAD",
                      "cfmDataspaceProfileId": "'"$CATENAX_PROFILE_ID"'",
-                     "credentialType": "CatenaMembershipCredential"
+                     "credentialType": "CatenaMembershipCredential",
+                     "termsAndConditions": "Catena-X Terms and Conditions\n\n1. Membership\nAll participants must hold a valid CatenaMembershipCredential.\n\n2. Data Usage\nData shared within Catena-X must comply with the IDSA Data Sharing Agreement.\n\n3. Liability\nParticipants are responsible for the accuracy of data they share."
                   }
                 }')
               DATASPACE_ID=$(echo "$DATASPACE_RESPONSE" | jq -r '.id')
@@ -125,7 +126,8 @@ spec:
                     "properties": {
                       "description": "A Mock Bicycle-Industry Dataspace",
                       "cfmDataspaceProfileId": "'"$BIKEX_PROFILE_ID"'",
-                      "credentialType": "BikeMembershipCredential"
+                      "credentialType": "BikeMembershipCredential",
+                      "termsAndConditions": "Bike-X Terms and Conditions\n\n1. Membership\nAll participants must hold a valid BikeMembershipCredential.\n\n2. Data Usage\nData shared within Bike-X must relate to bicycle industry operations.\n\n3. Liability\nParticipants are responsible for the accuracy of product and supply chain data they share."
                     }
                   }')
               BIKEX_ID=$(echo "$BIKEX_RESPONSE" | jq -r '.id')
