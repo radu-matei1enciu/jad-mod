@@ -62,14 +62,13 @@ data:
   edc.iam.oauth2.jwks.url: "http://keycloak.edc-v.svc.cluster.local:8080/realms/edcv/protocol/openid-connect/certs"
 
   # Default scopes config
-  edc.iam.dcp.scopes.membership.id: "membership-scope"
-  edc.iam.dcp.scopes.membership.type: "DEFAULT"
-  edc.iam.dcp.scopes.membership.value: "org.eclipse.dspace.dcp.vc.type:MembershipCredential:read"
-
-  edc.iam.dcp.scopes.manufacturer.id: "manufacturer-scope"
-  edc.iam.dcp.scopes.manufacturer.type: "POLICY"
-  edc.iam.dcp.scopes.manufacturer.value: "org.eclipse.dspace.dcp.vc.type:ManufacturerCredential:read"
-  edc.iam.dcp.scopes.manufacturer.prefix-mapping: "ManufacturerCredential"
+  edc.iam.dcp.scopes.catena-membership.id: "catena-membership-scope"
+  edc.iam.dcp.scopes.catena-membership.type: "DEFAULT"
+  edc.iam.dcp.scopes.catena-membership.value: "org.eclipse.dspace.dcp.vc.type:CatenaMembershipCredential:read"
+  
+  edc.iam.dcp.scopes.bike-membership.id: "bike-membership-scope"
+  edc.iam.dcp.scopes.bike-membership.type: "DEFAULT"
+  edc.iam.dcp.scopes.bike-membership.value: "org.eclipse.dspace.dcp.vc.type:BikeMembershipCredential:read"
 
   # Trusted Issuers
   edc.iam.trusted-issuer.issuer.id: "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer"
