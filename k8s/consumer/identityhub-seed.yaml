@@ -1,0 +1,417 @@
+# Seed job for the consumer physical connector's IdentityHub.
+#
+# Step 1 — Get required Keycloak tokens.
+# Step 2 — Create a holder entry in JAD's shared IssuerService with the required
+#           Catena membership properties.
+# Step 3 — Create the participant context in the consumer IH.
+#           IdentityHub generates the keypair and STS client credentials.
+# Step 4 — Write the IdentityHub-generated STS client secret to consumer Vault
+#           at the alias referenced by edc.iam.sts.oauth.client.secret.alias.
+# Step 5 — Request CatenaMembershipCredential issuance via DCP.
+# Step 6 — Poll the IH until the credential reaches status ISSUED.
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: identityhub-seed
+  namespace: consumer
+  labels:
+    app: identityhub-seed
+    type: consumer-job
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: identityhub-seed
+        type: consumer-job
+    spec:
+      restartPolicy: OnFailure
+
+      initContainers:
+        - name: wait-for-dependencies
+          image: curlimages/curl:latest
+          env:
+            - name: KC_HOST
+              value: "http://keycloak.edc-v.svc.cluster.local:8080"
+            - name: VAULT_ADDR
+              value: "http://vault.consumer.svc.cluster.local:8200"
+            - name: VAULT_TOKEN
+              value: "root"
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for consumer IdentityHub..."
+              until curl -sf http://identityhub.consumer.svc.cluster.local:7080/api/check/readiness; do
+                sleep 5
+              done
+              echo "IdentityHub readiness endpoint ready!"
+
+              echo "Waiting for consumer Vault health..."
+              until curl -sf "${VAULT_ADDR}/v1/sys/health"; do
+                sleep 2
+              done
+              echo "Vault health endpoint ready!"
+
+              echo "Waiting for consumer Vault KV secret engine..."
+              until curl -sf \
+                -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                "${VAULT_ADDR}/v1/sys/mounts/secret" > /dev/null; do
+                echo "Waiting for Vault secret mount..."
+                sleep 3
+              done
+              echo "Vault secret mount ready!"
+
+              echo "Testing consumer Vault read/write..."
+              until curl -sf \
+                -X POST \
+                -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d '{"data":{"content":"ok"}}' \
+                "${VAULT_ADDR}/v1/secret/data/identityhub-seed-readiness" > /dev/null; do
+                echo "Waiting until Vault accepts writes..."
+                sleep 3
+              done
+              echo "Vault accepts writes!"
+
+              echo "Waiting for JAD IssuerService..."
+              until curl -sf http://issuerservice.edc-v.svc.cluster.local:10010/api/check/readiness; do
+                sleep 5
+              done
+              echo "IssuerService ready!"
+
+              echo "Waiting for JAD Keycloak (realm edcv)..."
+              until wget -q --spider "${KC_HOST}/realms/edcv/.well-known/openid-configuration" > /dev/null 2>&1; do
+                sleep 2
+              done
+              echo "Keycloak ready!"
+
+              echo "Waiting a few extra seconds for IdentityHub/Vault startup stabilization..."
+              sleep 60
+
+      containers:
+        - name: seed-identityhub
+          image: curlimages/curl:latest
+          env:
+            - name: KC_HOST
+              value: "http://keycloak.edc-v.svc.cluster.local:8080"
+            - name: KC_REALM
+              value: "edcv"
+
+            # Provisioner client — creates holders + participant contexts
+            - name: PROVISIONER_CLIENT_ID
+              value: "provisioner"
+            - name: PROVISIONER_CLIENT_SECRET
+              value: "provisioner-secret"
+
+            # Admin client — requests credential issuance
+            - name: ADMIN_CLIENT_ID
+              value: "admin"
+            - name: ADMIN_CLIENT_SECRET
+              value: "edc-v-admin-secret"
+
+            # IdentityHub returns this DID as the STS clientId.
+            # The consumer controlplane must use the same value in edc.iam.sts.oauth.client.id.
+            - name: STS_CLIENT_ID
+              value: "did:web:identityhub.consumer.svc.cluster.local%3A7083:physical-consumer"
+
+            # Must match edc.iam.sts.oauth.client.secret.alias in controlplane config.
+            # The value stored at this alias will be the IdentityHub-generated STS secret.
+            - name: STS_VAULT_ALIAS
+              value: "physical-consumer-sts-client-secret"
+
+            # Physical consumer identity
+            - name: PARTICIPANT_CONTEXT_ID
+              value: "physical-consumer"
+            - name: PARTICIPANT_DID
+              value: "did:web:identityhub.consumer.svc.cluster.local%3A7083:physical-consumer"
+
+            # JAD shared IssuerService
+            - name: ISSUER_DID
+              value: "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer"
+            - name: ISSUER_ADMIN_URL
+              value: "http://issuerservice.edc-v.svc.cluster.local:10013/api/admin/v1alpha"
+            - name: ISSUER_CONTEXT_ID
+              value: "issuer"
+
+            # Consumer IH and Vault
+            - name: IH_URL
+              value: "http://identityhub.consumer.svc.cluster.local:7081/api/identity/v1alpha/participants/"
+            - name: VAULT_ADDR
+              value: "http://vault.consumer.svc.cluster.local:8200"
+            - name: VAULT_TOKEN
+              value: "root"
+
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+
+              echo "================================================"
+              echo "Step 1: Get required Keycloak tokens"
+              echo "================================================"
+
+              PROVISIONER_TOKEN=$(curl -sf -X POST \
+                "${KC_HOST}/realms/${KC_REALM}/protocol/openid-connect/token" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "grant_type=client_credentials" \
+                -d "client_id=${PROVISIONER_CLIENT_ID}" \
+                -d "client_secret=${PROVISIONER_CLIENT_SECRET}" \
+                -d "scope=issuer-admin-api:write identity-api:write" \
+                | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+
+              if [ -z "$PROVISIONER_TOKEN" ]; then
+                echo "✗ Failed to get provisioner token"
+                exit 1
+              fi
+
+              echo "✓ Provisioner token received"
+
+              ADMIN_TOKEN=$(curl -sf -X POST \
+                "${KC_HOST}/realms/${KC_REALM}/protocol/openid-connect/token" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "grant_type=client_credentials" \
+                -d "client_id=${ADMIN_CLIENT_ID}" \
+                -d "client_secret=${ADMIN_CLIENT_SECRET}" \
+                -d "scope=identity-api:write" \
+                | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+
+              if [ -z "$ADMIN_TOKEN" ]; then
+                echo "✗ Failed to get admin token"
+                exit 1
+              fi
+
+              echo "✓ Admin token received"
+
+              echo ""
+              echo "================================================"
+              echo "Step 2: Create holder in JAD IssuerService"
+              echo "================================================"
+
+              RESPONSE=$(curl -sS -w "\n%{http_code}" \
+                -X POST "${ISSUER_ADMIN_URL}/participants/${ISSUER_CONTEXT_ID}/holders" \
+                -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "{
+                  \"did\": \"${PARTICIPANT_DID}\",
+                  \"holderId\": \"${PARTICIPANT_DID}\",
+                  \"name\": \"Physical Consumer\",
+                  \"properties\": {
+                    \"membership\": \"active\",
+                    \"membershipType\": \"Catena\",
+                    \"membershipStartDate\": \"2025-01-01T00:00:00Z\",
+                    \"id\": \"${PARTICIPANT_DID}\"
+                  }
+                }")
+
+              HTTP_STATUS=$(echo "${RESPONSE}" | tail -n1)
+              BODY=$(echo "${RESPONSE}" | sed '$d')
+
+              if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 201 ]; then
+                echo "✓ Consumer holder created in IssuerService"
+              elif [ "$HTTP_STATUS" -eq 409 ]; then
+                echo "⚠ Consumer holder already exists, skipping"
+                echo "⚠ This is usually fine because IssuerService is shared in edc-v and survives consumer namespace resets."
+              else
+                echo "✗ Unexpected HTTP status creating holder: ${HTTP_STATUS}"
+                echo "Body: ${BODY}"
+                exit 1
+              fi
+
+              echo ""
+              echo "================================================"
+              echo "Step 3: Create participant context in consumer IH"
+              echo "================================================"
+
+              CREATE_RETRY=0
+              MAX_CREATE_RETRIES=20
+              HTTP_STATUS=""
+              BODY=""
+
+              while [ "${CREATE_RETRY}" -lt "${MAX_CREATE_RETRIES}" ]; do
+                RESPONSE=$(curl -sS -w "\n%{http_code}" \
+                  -X POST "${IH_URL}" \
+                  -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d "{
+                    \"roles\": [],
+                    \"serviceEndpoints\": [
+                      {
+                        \"type\": \"CredentialService\",
+                        \"serviceEndpoint\": \"http://identityhub.consumer.svc.cluster.local:7082/api/credentials/v1/participants/${PARTICIPANT_CONTEXT_ID}\",
+                        \"id\": \"consumer-credentialservice-1\"
+                      },
+                      {
+                        \"type\": \"ProtocolEndpoint\",
+                        \"serviceEndpoint\": \"http://controlplane.consumer.svc.cluster.local:8082/api/dsp/${PARTICIPANT_CONTEXT_ID}/2025-1\",
+                        \"id\": \"consumer-dsp\"
+                      }
+                    ],
+                    \"active\": true,
+                    \"participantId\": \"${PARTICIPANT_DID}\",
+                    \"participantContextId\": \"${PARTICIPANT_CONTEXT_ID}\",
+                    \"did\": \"${PARTICIPANT_DID}\",
+                    \"key\": {
+                      \"keyId\": \"${PARTICIPANT_DID}#key-1\",
+                      \"privateKeyAlias\": \"${PARTICIPANT_DID}#key-1\",
+                      \"keyGeneratorParams\": {
+                        \"algorithm\": \"EC\"
+                      }
+                    }
+                  }")
+
+                HTTP_STATUS=$(echo "${RESPONSE}" | tail -n1)
+                BODY=$(echo "${RESPONSE}" | sed '$d')
+
+                if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 201 ] || [ "$HTTP_STATUS" -eq 409 ]; then
+                  break
+                fi
+
+                echo "Participant context creation failed with HTTP ${HTTP_STATUS}, retry $((CREATE_RETRY + 1))/${MAX_CREATE_RETRIES}"
+                echo "Body: ${BODY}"
+                CREATE_RETRY=$((CREATE_RETRY + 1))
+                sleep 5
+              done
+
+              if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 201 ]; then
+                echo "✓ Participant context created in consumer IH"
+                echo "IH response: ${BODY}"
+              elif [ "$HTTP_STATUS" -eq 409 ]; then
+                echo "⚠ Participant context already exists."
+                echo "✗ Cannot retrieve generated STS clientSecret from a 409 response."
+                echo "✗ On a fresh consumer namespace this should not happen."
+                echo "✗ Check whether the consumer IdentityHub database is really fresh, or use a new PARTICIPANT_CONTEXT_ID."
+                exit 1
+              else
+                echo "✗ Unexpected HTTP status creating participant context after retries: ${HTTP_STATUS}"
+                echo "Body: ${BODY}"
+                exit 1
+              fi
+
+              IH_STS_CLIENT_ID=$(echo "${BODY}" | sed -n 's/.*"clientId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+              IH_STS_CLIENT_SECRET=$(echo "${BODY}" | sed -n 's/.*"clientSecret"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+
+              if [ -z "${IH_STS_CLIENT_ID}" ]; then
+                IH_STS_CLIENT_ID=$(echo "${BODY}" | sed -n 's/.*"client_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+              fi
+
+              if [ -z "${IH_STS_CLIENT_SECRET}" ]; then
+                IH_STS_CLIENT_SECRET=$(echo "${BODY}" | sed -n 's/.*"client_secret"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+              fi
+
+              if [ -z "${IH_STS_CLIENT_SECRET}" ]; then
+                echo "✗ IdentityHub did not return an STS clientSecret"
+                echo "Body: ${BODY}"
+                exit 1
+              fi
+
+              echo "✓ IdentityHub returned STS client credentials"
+              echo "IH STS clientId: ${IH_STS_CLIENT_ID}"
+
+              if [ -n "${IH_STS_CLIENT_ID}" ] && [ "${IH_STS_CLIENT_ID}" != "${STS_CLIENT_ID}" ]; then
+                echo "⚠ IdentityHub returned clientId '${IH_STS_CLIENT_ID}', but expected '${STS_CLIENT_ID}'."
+                echo "⚠ Make sure edc.iam.sts.oauth.client.id in the consumer controlplane matches the IdentityHub clientId."
+              fi
+
+              echo ""
+              echo "================================================"
+              echo "Step 4: Write IdentityHub STS client secret to consumer Vault"
+              echo "================================================"
+
+              HTTP_STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
+                -X POST "${VAULT_ADDR}/v1/secret/data/${STS_VAULT_ALIAS}" \
+                -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "{\"data\": {\"content\": \"${IH_STS_CLIENT_SECRET}\"}}")
+
+              if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+                echo "✓ IH STS secret written to vault at secret/data/${STS_VAULT_ALIAS}"
+              else
+                echo "✗ Failed to write IH STS secret to Vault: HTTP ${HTTP_STATUS}"
+                exit 1
+              fi
+
+              echo ""
+              echo "================================================"
+              echo "Step 5: Request CatenaMembershipCredential issuance"
+              echo "================================================"
+
+              HOLDER_PID="catena-membership-request-${PARTICIPANT_CONTEXT_ID}-$(date +%s)"
+
+              RESPONSE=$(curl -sS -w "\n%{http_code}" \
+                -X POST "${IH_URL}${PARTICIPANT_CONTEXT_ID}/credentials/request" \
+                -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "{
+                  \"issuerDid\": \"${ISSUER_DID}\",
+                  \"holderPid\": \"${HOLDER_PID}\",
+                  \"credentials\": [
+                    {
+                      \"format\": \"VC2_0_JOSE\",
+                      \"type\": \"CatenaMembershipCredential\",
+                      \"id\": \"catena-membership-credential-def\"
+                    }
+                  ]
+                }")
+
+              HTTP_STATUS=$(echo "${RESPONSE}" | tail -n1)
+              BODY=$(echo "${RESPONSE}" | sed '$d')
+
+              if [ "$HTTP_STATUS" -eq 201 ]; then
+                echo "✓ Credential issuance request sent"
+              else
+                echo "✗ Unexpected HTTP status requesting credential: ${HTTP_STATUS}"
+                echo "Body: ${BODY}"
+                exit 1
+              fi
+
+              echo ""
+              echo "================================================"
+              echo "Step 6: Waiting for credential to be ISSUED"
+              echo "================================================"
+
+              STATUS=""
+              MAX_RETRIES=30
+              RETRY=0
+
+              while [ "${STATUS}" != "ISSUED" ]; do
+                if [ "${RETRY}" -ge "${MAX_RETRIES}" ]; then
+                  echo "✗ Credential not ISSUED after ${MAX_RETRIES} attempts"
+                  exit 1
+                fi
+
+                RESPONSE=$(curl -sS -w "\n%{http_code}" \
+                  "${IH_URL}${PARTICIPANT_CONTEXT_ID}/credentials/request/${HOLDER_PID}" \
+                  -H "Authorization: Bearer ${ADMIN_TOKEN}")
+
+                HTTP_STATUS=$(echo "${RESPONSE}" | tail -n1)
+                BODY=$(echo "${RESPONSE}" | sed '$d')
+
+                if [ "${HTTP_STATUS}" -ne 200 ]; then
+                  echo "✗ Poll failed: HTTP ${HTTP_STATUS}"
+                  echo "Body: ${BODY}"
+                  exit 1
+                fi
+
+                STATUS=$(echo "${BODY}" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
+
+                echo "  Credential status: ${STATUS} (attempt $((RETRY + 1))/${MAX_RETRIES})"
+                echo "  Body: ${BODY}"
+
+                if [ "${STATUS}" = "ERROR" ]; then
+                  echo "✗ Credential request entered ERROR state"
+                  exit 1
+                fi
+
+                RETRY=$((RETRY + 1))
+                sleep 5
+              done
+
+              echo "✓ CatenaMembershipCredential is ISSUED"
+              echo ""
+              echo "================================================"
+              echo "IdentityHub seeding completed successfully!"
+              echo "================================================"

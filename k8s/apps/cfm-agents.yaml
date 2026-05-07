@@ -76,8 +76,8 @@ spec:
               mountPath: /etc/appname
               readOnly: true
         - name: onboarding-agent
-          image: ghcr.io/eclipse-cfm/cfm/obagent@sha256:6f1950a9bccc5b6f7bfc05899da480cecdc716da57275100ce313db1b9baa866
-          imagePullPolicy: Always
+          image: ghcr.io/vladalinbosii/obagent:local
+          imagePullPolicy: Never
           command: [ "/obagent" ]
           args: [
             "--mode=debug"

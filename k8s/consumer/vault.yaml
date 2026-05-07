@@ -1,0 +1,132 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault
+  namespace: consumer
+  labels:
+    type: consumer-infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vault
+  template:
+    metadata:
+      labels:
+        app: vault
+        type: consumer-infra
+    spec:
+      containers:
+        - name: vault
+          # Pinned digest — same as JAD's vault deployment
+          image: hashicorp/vault@sha256:e40c741ed95bb271425e3e6ca6c222d620cf8682f6f7a1b1e7c9d49d0aba484b
+          ports:
+            - containerPort: 8200
+          env:
+            - name: VAULT_DEV_ROOT_TOKEN_ID
+              value: "root"
+            - name: VAULT_DEV_LISTEN_ADDRESS
+              value: "0.0.0.0:8200"
+            - name: SKIP_SETCAP
+              value: "true"
+          args:
+            - "server"
+            - "-dev"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: consumer
+spec:
+  selector:
+    app: vault
+  ports:
+    - port: 8200
+      targetPort: 8200
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: vault
+  namespace: consumer
+spec:
+  parentRefs:
+    - name: consumer-gateway
+  hostnames:
+    - vault.consumer.localhost
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: vault
+          port: 8200
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-auth
+  namespace: consumer
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vault-bootstrap
+  namespace: consumer
+  labels:
+    type: consumer-job
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        type: consumer-job
+    spec:
+      serviceAccountName: vault-auth
+      restartPolicy: OnFailure
+      containers:
+        - name: vault-cli
+          image: hashicorp/vault@sha256:e40c741ed95bb271425e3e6ca6c222d620cf8682f6f7a1b1e7c9d49d0aba484b
+          env:
+            - name: VAULT_ADDR
+              value: "http://vault.consumer.svc.cluster.local:8200"
+            - name: VAULT_TOKEN
+              value: "root"
+            - name: KC_HOST
+              value: "http://keycloak.edc-v.svc.cluster.local:8080"
+          command: ["sh", "-ec"]
+          args:
+            - |
+              echo "Waiting for Vault to be ready..."
+              until vault status > /dev/null 2>&1; do
+                echo "Vault not ready, retrying in 2s..."
+                sleep 2
+              done
+              echo "Vault is ready!"
+
+              echo "Waiting for JAD Keycloak (realm edcv)..."
+              until wget -q --spider "${KC_HOST}/realms/edcv/.well-known/openid-configuration" > /dev/null 2>&1; do
+                echo "Keycloak not ready, retrying in 2s..."
+                sleep 2
+              done
+              echo "Keycloak is ready!"
+
+              # ── KV v2 secrets engine ───────────────────────────────────────────
+              vault secrets enable -path=secret -version=2 kv || true
+
+              # ── AES key for symmetric encryption (controlplane + IH) ───────────
+              vault write secret/data/aes-key-alias -<<EOF
+              {
+                "data": {
+                  "content": "yHo9w6m2KOI3FE7vI+fcN6j86JDQ6V10lJPlv9lLWoE="
+                }
+              }
+              EOF
+
+              echo "Vault bootstrap completed successfully!"

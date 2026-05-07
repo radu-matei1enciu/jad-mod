@@ -1,0 +1,13 @@
+resources:
+  - namespace.yaml
+  - gateway.yaml
+  - postgres.yaml
+  - vault.yaml
+  - identityhub-config.yaml
+  - identityhub.yaml
+  - identityhub-seed.yaml
+  - controlplane-config.yaml
+  - controlplane.yaml
+  - controlplane-seed.yaml
+  - dataplane-config.yaml
+  - dataplane.yaml

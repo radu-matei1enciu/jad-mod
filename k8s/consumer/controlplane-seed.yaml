@@ -1,0 +1,235 @@
+# Registers the physical consumer ParticipantContext, sets the participant-scoped
+# runtime config required for JAD/DCP, registers the consumer dataplane instance,
+# and registers the CEL expression used to evaluate CatenaMembershipCredential policies.
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: controlplane-seed
+  namespace: consumer
+  labels:
+    app: controlplane-seed
+    type: consumer-job
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: controlplane-seed
+        type: consumer-job
+    spec:
+      restartPolicy: OnFailure
+
+      initContainers:
+        - name: wait-for-controlplane
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              until curl -sf http://controlplane.consumer.svc.cluster.local:8080/api/check/readiness; do
+                echo "Waiting for consumer controlplane..."
+                sleep 5
+              done
+              echo "Controlplane ready!"
+
+      containers:
+        - name: seed-controlplane
+          image: curlimages/curl:latest
+          env:
+            - name: KC_HOST
+              value: "http://keycloak.edc-v.svc.cluster.local:8080"
+
+            - name: KC_REALM
+              value: "edcv"
+
+            - name: ADMIN_CLIENT_ID
+              value: "admin"
+
+            - name: ADMIN_CLIENT_SECRET
+              value: "edc-v-admin-secret"
+
+            - name: PROVISIONER_CLIENT_ID
+              value: "provisioner"
+
+            - name: PROVISIONER_CLIENT_SECRET
+              value: "provisioner-secret"
+
+            - name: PARTICIPANT_CONTEXT_ID
+              value: "physical-consumer"
+
+            - name: PARTICIPANT_DID
+              value: "did:web:identityhub.consumer.svc.cluster.local%3A7083:physical-consumer"
+
+            - name: STS_CLIENT_ID
+              value: "did:web:identityhub.consumer.svc.cluster.local%3A7083:physical-consumer"
+
+            - name: STS_CLIENT_SECRET_ALIAS
+              value: "physical-consumer-sts-client-secret"
+
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+
+              CP_BASE_URL="http://controlplane.consumer.svc.cluster.local:8081/api/mgmt/v5beta"
+              PARTICIPANTS_URL="${CP_BASE_URL}/participants"
+              PARTICIPANT_CONFIG_URL="${CP_BASE_URL}/participants/${PARTICIPANT_CONTEXT_ID}/config"
+              CEL_URL="${CP_BASE_URL}/celexpressions"
+
+              echo "================================================"
+              echo "Step 0: Get management API tokens"
+              echo "================================================"
+
+              ADMIN_TOKEN=$(curl -sf -X POST \
+                "${KC_HOST}/realms/${KC_REALM}/protocol/openid-connect/token" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "grant_type=client_credentials" \
+                -d "client_id=${ADMIN_CLIENT_ID}" \
+                -d "client_secret=${ADMIN_CLIENT_SECRET}" \
+                -d "scope=management-api:write management-api:read" \
+                | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+
+              if [ -z "${ADMIN_TOKEN}" ]; then
+                echo "✗ Failed to get admin management API token"
+                exit 1
+              fi
+
+              echo "✓ Admin management API token received"
+
+              PROVISIONER_TOKEN=$(curl -sf -X POST \
+                "${KC_HOST}/realms/${KC_REALM}/protocol/openid-connect/token" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "grant_type=client_credentials" \
+                -d "client_id=${PROVISIONER_CLIENT_ID}" \
+                -d "client_secret=${PROVISIONER_CLIENT_SECRET}" \
+                -d "scope=management-api:write management-api:read" \
+                | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+
+              if [ -z "${PROVISIONER_TOKEN}" ]; then
+                echo "✗ Failed to get provisioner management API token"
+                exit 1
+              fi
+
+              echo "✓ Provisioner management API token received"
+
+              echo ""
+              echo "================================================"
+              echo "Step 1: Register physical consumer ParticipantContext"
+              echo "================================================"
+
+              PARTICIPANT_RESPONSE=$(curl -sS -w "\n%{http_code}" \
+                -X POST "${PARTICIPANTS_URL}" \
+                -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "{
+                  \"@context\": [\"https://w3id.org/edc/connector/management/v2\"],
+                  \"@type\": \"ParticipantContext\",
+                  \"@id\": \"${PARTICIPANT_CONTEXT_ID}\",
+                  \"identity\": \"${PARTICIPANT_DID}\",
+                  \"properties\": {}
+                }")
+
+              PARTICIPANT_HTTP_STATUS=$(echo "${PARTICIPANT_RESPONSE}" | tail -n1)
+              PARTICIPANT_BODY=$(echo "${PARTICIPANT_RESPONSE}" | sed '$d')
+
+              if [ "${PARTICIPANT_HTTP_STATUS}" -eq 409 ]; then
+                echo "⚠ ParticipantContext already exists, continuing"
+              elif [ "${PARTICIPANT_HTTP_STATUS}" -lt 200 ] || [ "${PARTICIPANT_HTTP_STATUS}" -ge 300 ]; then
+                echo "✗ Could not register ParticipantContext"
+                echo "HTTP status: ${PARTICIPANT_HTTP_STATUS}"
+                echo "Body: ${PARTICIPANT_BODY}"
+                exit 1
+              else
+                echo "✓ ParticipantContext registered"
+              fi
+
+              echo ""
+              echo "================================================"
+              echo "Step 2: Set physical consumer ParticipantContextConfig"
+              echo "================================================"
+
+              CONFIG_RESPONSE=$(curl -sS -w "\n%{http_code}" \
+                -X PUT "${PARTICIPANT_CONFIG_URL}" \
+                -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "{
+                  \"@context\": [\"https://w3id.org/edc/connector/management/v2\"],
+                  \"@type\": \"ParticipantContextConfig\",
+                  \"entries\": {
+                    \"edc.participant.id\": \"${PARTICIPANT_DID}\",
+                    \"edc.iam.did.web.use.https\": \"false\",
+
+                    \"edc.dsp.callback.address\": \"http://controlplane.consumer.svc.cluster.local:8082/api/dsp/${PARTICIPANT_CONTEXT_ID}\",
+
+                    \"edc.iam.sts.oauth.token.url\": \"http://identityhub.consumer.svc.cluster.local:7084/api/sts/token\",
+                    \"edc.iam.sts.oauth.client.id\": \"${STS_CLIENT_ID}\",
+                    \"edc.iam.sts.oauth.client.secret.alias\": \"${STS_CLIENT_SECRET_ALIAS}\",
+
+                    \"edc.iam.oauth2.issuer\": \"http://keycloak.edc-v.svc.cluster.local:8080/realms/edcv\",
+                    \"edc.iam.oauth2.jwks.url\": \"http://keycloak.edc-v.svc.cluster.local:8080/realms/edcv/protocol/openid-connect/certs\",
+
+                    \"edc.iam.dcp.scopes.catena-membership.id\": \"catena-membership-scope\",
+                    \"edc.iam.dcp.scopes.catena-membership.type\": \"DEFAULT\",
+                    \"edc.iam.dcp.scopes.catena-membership.value\": \"org.eclipse.dspace.dcp.vc.type:CatenaMembershipCredential:read\",
+
+                    \"edc.iam.trusted-issuer.issuer.id\": \"did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer\"
+                  },
+                  \"privateEntries\": {}
+                }")
+
+              CONFIG_HTTP_STATUS=$(echo "${CONFIG_RESPONSE}" | tail -n1)
+              CONFIG_BODY=$(echo "${CONFIG_RESPONSE}" | sed '$d')
+
+              if [ "${CONFIG_HTTP_STATUS}" -lt 200 ] || [ "${CONFIG_HTTP_STATUS}" -ge 300 ]; then
+                echo "✗ Could not set ParticipantContextConfig"
+                echo "HTTP status: ${CONFIG_HTTP_STATUS}"
+                echo "Body: ${CONFIG_BODY}"
+                exit 1
+              else
+                echo "✓ ParticipantContextConfig set"
+              fi
+
+
+              echo ""
+              echo "================================================"
+              echo "Step 4: Create CatenaMembership CEL Expression"
+              echo "================================================"
+
+              create_cel() {
+                RESPONSE=$(curl -sS -w "\n%{http_code}" \
+                  -X POST "${CEL_URL}" \
+                  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d "$1")
+
+                HTTP_STATUS=$(echo "${RESPONSE}" | tail -n1)
+                BODY=$(echo "${RESPONSE}" | sed '$d')
+
+                if [ "${HTTP_STATUS}" -eq 409 ]; then
+                  echo "⚠ CEL expression already exists, skipping"
+                elif [ "${HTTP_STATUS}" -lt 200 ] || [ "${HTTP_STATUS}" -ge 300 ]; then
+                  echo "✗ Unexpected HTTP status while creating CEL: ${HTTP_STATUS}"
+                  echo "Body: ${BODY}"
+                  exit 1
+                else
+                  echo "✓ CEL expression created/registered"
+                fi
+              }
+
+              create_cel '{
+                "@context": ["https://w3id.org/edc/connector/management/v2"],
+                "@type": "CelExpression",
+                "@id": "catena-membership-cel",
+                "leftOperand": "CatenaMembershipCredential",
+                "description": "Evaluates a CatenaMembershipCredential from JAD dataspace participants",
+                "scopes": ["catalog", "contract.negotiation", "transfer.process"],
+                "expression": "ctx.agent.claims.vc.filter(c, c.type.exists(t, t == '\''CatenaMembershipCredential'\'')).exists(c, c.credentialSubject.exists(cs, timestamp(cs.membershipStartDate) < now))"
+              }'
+
+              echo ""
+              echo "================================================"
+              echo "Controlplane seeding completed successfully!"
+              echo "================================================"

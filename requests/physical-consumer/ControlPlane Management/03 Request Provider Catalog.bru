@@ -1,0 +1,154 @@
+meta {
+  name: 03 Request Provider Catalog
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{consumerCpBaseUrl}}/v5beta/participants/{{consumerParticipantContextId}}/catalog/request
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{accessToken}}
+  Content-Type: application/json
+  Accept: application/json
+}
+
+body:json {
+  {
+    "@context": [
+      "https://w3id.org/edc/connector/management/v2"
+    ],
+    "@type": "CatalogRequest",
+    "counterPartyAddress": "{{providerProtocolUrl}}",
+    "counterPartyId": "{{providerDid}}",
+    "protocol": "{{protocol}}",
+    "querySpec": {
+      "@type": "QuerySpec",
+      "offset": 0,
+      "limit": 50
+    }
+  }
+}
+
+script:pre-request {
+  if (!bru.getVar("accessToken")) {
+    throw new Error("Missing accessToken. Run 00 Get Management Token first.");
+  }
+
+  // Fallback defaults in case Bruno did not load collection.bru/local.bru
+  if (!bru.getVar("consumerCpBaseUrl")) {
+    bru.setVar("consumerCpBaseUrl", "http://localhost:9081/api/mgmt");
+  }
+
+  if (!bru.getVar("consumerParticipantContextId")) {
+    bru.setVar("consumerParticipantContextId", "physical-consumer");
+  }
+
+  if (!bru.getVar("consumerParticipantId")) {
+    bru.setVar("consumerParticipantId", "physical-consumer");
+  }
+
+  if (!bru.getVar("protocol")) {
+    bru.setVar("protocol", "dataspace-protocol-http:2025-1");
+  }
+
+  if (!bru.getVar("providerParticipantId") || !bru.getVar("providerDid") || !bru.getVar("providerProtocolUrl")) {
+    throw new Error("Provider variables are missing. Run 01 Discover Virtual Providers first.");
+  }
+
+  console.log("Consumer CP base URL:", bru.getVar("consumerCpBaseUrl"));
+  console.log("Consumer context:", bru.getVar("consumerParticipantContextId"));
+  console.log("Provider participant:", bru.getVar("providerParticipantId"));
+  console.log("Provider DID:", bru.getVar("providerDid"));
+  console.log("Provider protocol URL:", bru.getVar("providerProtocolUrl"));
+  console.log("Protocol:", bru.getVar("protocol"));
+}
+
+script:post-response {
+  const status = res.getStatus();
+  const raw = res.getBody();
+
+  let body;
+  try {
+    body = typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch (e) {
+    console.log("Raw response:", raw);
+    throw new Error("Could not parse catalog response as JSON");
+  }
+
+  if (status < 200 || status >= 300) {
+    console.log("HTTP status:", status);
+    console.log("Catalog error response:", JSON.stringify(body, null, 2));
+    throw new Error("Catalog request failed");
+  }
+
+  console.log("Catalog response:");
+  console.log(JSON.stringify(body, null, 2));
+
+  function asArray(value) {
+    if (!value) return [];
+    return Array.isArray(value) ? value : [value];
+  }
+
+  const datasets = asArray(
+    body["dataset"] ||
+    body["dcat:dataset"] ||
+    body["https://www.w3.org/ns/dcat#dataset"]
+  );
+
+  console.log("Datasets found:", datasets.length);
+
+  if (datasets.length === 0) {
+    throw new Error("No datasets found. Check whether the provider uploaded/shared an asset and created a contract definition.");
+  }
+
+  const dataset = datasets[0];
+
+  const assetId =
+    dataset["@id"] ||
+    dataset["id"] ||
+    dataset["assetId"];
+
+  if (!assetId) {
+    throw new Error("Could not find assetId in the first catalog dataset.");
+  }
+
+  bru.setVar("assetId", assetId);
+  bru.setVar("ASSET_ID", assetId);
+  console.log("Saved assetId:", assetId);
+
+  const policies = asArray(
+    dataset["hasPolicy"] ||
+    dataset["odrl:hasPolicy"] ||
+    dataset["https://www.w3.org/ns/odrl/2/hasPolicy"]
+  );
+
+  console.log("Policies/offers found:", policies.length);
+
+  if (policies.length === 0) {
+    throw new Error("Dataset has no policy/contract offer.");
+  }
+
+  const offerPolicy = policies[0];
+
+  const policyId =
+    offerPolicy["@id"] ||
+    offerPolicy["id"];
+
+  if (!policyId) {
+    throw new Error("Could not find policyId/offerId in the first offer policy.");
+  }
+
+  bru.setVar("policyId", policyId);
+  bru.setVar("offerId", policyId);
+  bru.setVar("POLICY_ID", policyId);
+
+  bru.setVar("offerPolicy", JSON.stringify(offerPolicy));
+  bru.setVar("OFFER_POLICY", JSON.stringify(offerPolicy));
+
+  console.log("Saved policyId:", policyId);
+  console.log("Saved offerPolicy");
+}

@@ -1,0 +1,54 @@
+meta {
+  name: 00 Get Management Token
+  type: http
+  seq: 0
+}
+
+post {
+  url: {{keycloakTokenUrl}}
+  body: formUrlEncoded
+  auth: none
+}
+
+headers {
+  Content-Type: application/x-www-form-urlencoded
+  Accept: application/json
+}
+
+body:form-urlencoded {
+  grant_type: client_credentials
+  client_id: {{keycloakClientId}}
+  client_secret: {{keycloakClient}}
+  scope: management-api:read management-api:write
+}
+
+script:post-response {
+  const status = res.getStatus();
+  const raw = res.getBody();
+  let body;
+
+  try {
+    body = typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch (e) {
+    console.log("Raw response:", raw);
+    throw new Error("Could not parse Keycloak response as JSON");
+  }
+
+  if (status < 200 || status >= 300) {
+    console.log("HTTP status:", status);
+    console.log("Keycloak response:", JSON.stringify(body, null, 2));
+    throw new Error("Keycloak token request failed");
+  }
+
+  if (!body.access_token) {
+    console.log("Keycloak response:", JSON.stringify(body, null, 2));
+    throw new Error("No access_token found in Keycloak response");
+  }
+
+  bru.setVar("accessToken", body.access_token);
+  bru.setVar("ACCESS_TOKEN", body.access_token);
+  bru.setVar("tokenExpiresIn", String(body.expires_in || ""));
+
+  console.log("Saved accessToken");
+  console.log("Expires in:", body.expires_in);
+}
