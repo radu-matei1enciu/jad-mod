@@ -99,13 +99,6 @@ spec:
                         "issuer": "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer",
                         "format": "VC2_0_JOSE",
                         "id": "catena-membership-credential-def"
-                      },
-                      {
-                        "type": "CatenaManufacturerCredential",
-                        "issuer": "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer",
-                        "format": "VC2_0_JOSE",
-                        "id": "catena-manufacturer-credential-def",
-                        "role": "manufacturer"
                       }
                     ]
                   }
@@ -149,13 +142,6 @@ spec:
                         "issuer": "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer",
                         "format": "VC2_0_JOSE",
                         "id": "bike-membership-credential-def"
-                      },
-                      {
-                        "type": "BikeManufacturerCredential",
-                        "issuer": "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer",
-                        "format": "VC2_0_JOSE",
-                        "id": "bike-manufacturer-credential-def",
-                        "role": "manufacturer"
                       }
                     ]
                   }
