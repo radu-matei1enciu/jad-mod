@@ -190,14 +190,7 @@ spec:
                         "connector-provisioner",
                         "registration-agent"
                       ]
-                    }],
-
-                    "cfm.orchestration.vpa.join": [{
-                     "id": "join-onboarding",
-                     "type": "onboarding-activity",
-                     "dependsOn": []
-                     }]
-
+                    }]
                   },
                   "description": "Orchestrates the deployment of a new dataspace member",
                   "schema": {},

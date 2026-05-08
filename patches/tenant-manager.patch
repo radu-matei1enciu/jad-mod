@@ -1,0 +1,15 @@
+diff --git a/k8s/apps/tenant-manager.yaml b/k8s/apps/tenant-manager.yaml
+index c5bbe07..8a3bafb 100644
+--- a/k8s/apps/tenant-manager.yaml
++++ b/k8s/apps/tenant-manager.yaml
+@@ -34,8 +34,8 @@ spec:
+     spec:
+       containers:
+         - name: tenant-manager
+-          image: ghcr.io/vladalinbosii/tmanager:local
+-          imagePullPolicy: Never
++          image: ghcr.io/eclipse-cfm/cfm/tmanager@sha256:5ab536a933c7ba577e6894ae192e49298c930e22e55b2b911c56d17bea29e56d
++          imagePullPolicy: Always
+           command: [ "/tmanager" ]
+           args: [
+             "--mode=debug"

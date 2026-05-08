@@ -34,8 +34,8 @@ spec:
     spec:
       containers:
         - name: controlplane
-          image: ghcr.io/metaform/jad/controlplane:latest
-          imagePullPolicy: Never
+          image: ghcr.io/radu-matei1enciu/controlplane:v1
+          imagePullPolicy: Always
           envFrom:
             - configMapRef: { name: controlplane-config }
             - configMapRef:

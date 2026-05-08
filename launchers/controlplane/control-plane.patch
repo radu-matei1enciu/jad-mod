@@ -1,0 +1,402 @@
+diff --git a/core/control-plane/control-plane-aggregate-services/src/main/java/org/eclipse/edc/connector/controlplane/services/catalog/CatalogServiceImpl.java b/core/control-plane/control-plane-aggregate-services/src/main/java/org/eclipse/edc/connector/controlplane/services/catalog/CatalogServiceImpl.java
+index 28f8cca06..1e3ad017c 100644
+--- a/core/control-plane/control-plane-aggregate-services/src/main/java/org/eclipse/edc/connector/controlplane/services/catalog/CatalogServiceImpl.java
++++ b/core/control-plane/control-plane-aggregate-services/src/main/java/org/eclipse/edc/connector/controlplane/services/catalog/CatalogServiceImpl.java
+@@ -42,7 +42,7 @@ public class CatalogServiceImpl implements CatalogService {
+                 .querySpec(querySpec)
+                 .additionalScopes(additionalScopes)
+                 .build();
+-
++        System.out.println("[CatalogServiceImpl] CatalogRequestMessage built | additionalScopes on message: " + request.getAdditionalScopes());
+         return dispatcher.dispatch(participantContext.getParticipantContextId(), byte[].class, request);
+     }
+ 
+diff --git a/core/control-plane/control-plane-aggregate-services/src/main/java/org/eclipse/edc/connector/controlplane/services/protocol/ProtocolTokenValidatorImpl.java b/core/control-plane/control-plane-aggregate-services/src/main/java/org/eclipse/edc/connector/controlplane/services/protocol/ProtocolTokenValidatorImpl.java
+index 2f63ad0f4..518fc15bd 100644
+--- a/core/control-plane/control-plane-aggregate-services/src/main/java/org/eclipse/edc/connector/controlplane/services/protocol/ProtocolTokenValidatorImpl.java
++++ b/core/control-plane/control-plane-aggregate-services/src/main/java/org/eclipse/edc/connector/controlplane/services/protocol/ProtocolTokenValidatorImpl.java
+@@ -32,6 +32,7 @@ import org.eclipse.edc.spi.monitor.Monitor;
+ import org.eclipse.edc.spi.result.ServiceResult;
+ import org.eclipse.edc.spi.types.domain.message.RemoteMessage;
+ 
++import java.util.List;
+ import java.util.Optional;
+ 
+ /**
+@@ -44,7 +45,6 @@ public class ProtocolTokenValidatorImpl implements ProtocolTokenValidator {
+     private final PolicyEngine policyEngine;
+     private final ParticipantAgentService agentService;
+     private final DataspaceProfileContextRegistry dataspaceProfileContextRegistry;
+-
+     private final Monitor monitor;
+ 
+     public ProtocolTokenValidatorImpl(IdentityService identityService, PolicyEngine policyEngine, Monitor monitor,
+@@ -57,37 +57,114 @@ public class ProtocolTokenValidatorImpl implements ProtocolTokenValidator {
+     }
+ 
+     @Override
+-    public ServiceResult<ParticipantAgent> verify(ParticipantContext participantContext, TokenRepresentation tokenRepresentation, RequestPolicyContext.Provider policyContextProvider, Policy policy, RemoteMessage message) {
++    public ServiceResult<ParticipantAgent> verify(ParticipantContext participantContext, TokenRepresentation tokenRepresentation,
++                                                  RequestPolicyContext.Provider policyContextProvider, Policy policy, RemoteMessage message) {
++        monitor.debug("[ProtocolTokenValidatorImpl] === verify() invoked — NEW BUILD ===");
++        monitor.debug("[ProtocolTokenValidatorImpl] participantContextId=" + participantContext.getParticipantContextId());
++        monitor.debug("[ProtocolTokenValidatorImpl] message protocol=" + message.getProtocol());
++
+         var requestScopeBuilder = RequestScope.Builder.newInstance();
+-        var requestContext = RequestContext.Builder.newInstance().message(message).direction(RequestContext.Direction.Ingress).build();
++        var requestContext = RequestContext.Builder.newInstance()
++                .message(message)
++                .direction(RequestContext.Direction.Ingress)
++                .build();
+         var policyContext = policyContextProvider.instantiate(requestContext, requestScopeBuilder);
+         policyEngine.evaluate(policy, policyContext);
++
++        var policyScopes = policyContext.requestScopeBuilder().build().getScopes();
++        monitor.debug("[ProtocolTokenValidatorImpl] policyScopes (" + policyScopes.size() + "): " + policyScopes);
++
++        var tokenScopes = extractScopesFromToken(tokenRepresentation.getToken());
++        monitor.debug("[ProtocolTokenValidatorImpl] tokenScopes (" + tokenScopes.size() + "): " + tokenScopes);
++
++        var allScopes = new java.util.HashSet<>(policyScopes);
++        allScopes.addAll(tokenScopes);
++        monitor.debug("[ProtocolTokenValidatorImpl] mergedScopes (" + allScopes.size() + "): " + allScopes);
++
+         var verificationContext = VerificationContext.Builder.newInstance()
+                 .policy(policy)
+-                .scopes(policyContext.requestScopeBuilder().build().getScopes())
++                .scopes(allScopes.stream().toList())
+                 .build();
++
++        monitor.debug("[ProtocolTokenValidatorImpl] calling identityService.verifyJwtToken() with scopes: " + allScopes);
+         var tokenValidation = identityService.verifyJwtToken(participantContext.getParticipantContextId(), tokenRepresentation, verificationContext);
+         if (tokenValidation.failed()) {
+-            monitor.debug(() -> "Unauthorized: %s".formatted(tokenValidation.getFailureDetail()));
++            monitor.debug("[ProtocolTokenValidatorImpl] verifyJwtToken failed: " + tokenValidation.getFailureDetail());
+             return ServiceResult.unauthorized("Unauthorized");
+         }
+ 
++        monitor.debug("[ProtocolTokenValidatorImpl] verifyJwtToken succeeded");
+         var claimToken = tokenValidation.getContent();
+ 
+         var id = Optional.of(message.getProtocol())
+                 .map(dataspaceProfileContextRegistry::getIdExtractionFunction)
+                 .map(extractor -> extractor.apply(claimToken))
+                 .orElseGet(() -> {
+-                    monitor.debug(() -> "Unauthorized: Cannot extract id on protocol [%s] from claims: %s.".formatted(message.getProtocol(), claimToken.getClaims()));
++                    monitor.debug("[ProtocolTokenValidatorImpl] Cannot extract id on protocol [%s] from claims: %s."
++                            .formatted(message.getProtocol(), claimToken.getClaims()));
+                     return null;
+                 });
+ 
+         if (id == null) {
++            monitor.debug("[ProtocolTokenValidatorImpl] id extraction returned null — Unauthorized");
+             return ServiceResult.unauthorized("Unauthorized");
+         }
+ 
++        monitor.debug("[ProtocolTokenValidatorImpl] id extracted: " + id);
+         var participantAgent = agentService.createFor(claimToken, id);
+         return ServiceResult.success(participantAgent);
+     }
+ 
+-}
++    private List<String> extractScopesFromToken(String bearerToken) {
++        try {
++            var token = bearerToken.replace("Bearer ", "").trim();
++
++            // decode outer JWT payload
++            var outerPayload = decodeJwtPayload(token);
++            if (outerPayload == null) return List.of();
++            monitor.debug("[extractScopesFromToken] outer claim keys: " + outerPayload.keySet());
++
++            // scope is in the inner "token" claim (DCP SI token structure)
++            var innerJwt = outerPayload.get("token");
++            if (innerJwt == null) {
++                monitor.debug("[extractScopesFromToken] no inner 'token' claim found");
++                return List.of();
++            }
++            monitor.debug("[extractScopesFromToken] found inner token, decoding...");
++
++            var innerPayload = decodeJwtPayload(innerJwt.toString());
++            if (innerPayload == null) return List.of();
++            monitor.debug("[extractScopesFromToken] inner claim keys: " + innerPayload.keySet());
++
++            var scope = innerPayload.get("scope");
++            monitor.debug("[extractScopesFromToken] inner scope claim: " + scope);
++            if (scope == null) {
++                monitor.debug("[extractScopesFromToken] no 'scope' claim in inner token");
++                return List.of();
++            }
++
++            var scopes = List.of(scope.toString().split(" "));
++            monitor.debug("[extractScopesFromToken] extracted scopes: " + scopes);
++            return scopes;
++
++        } catch (Exception e) {
++            monitor.debug("[extractScopesFromToken] exception: " + e.getMessage());
++            return List.of();
++        }
++    }
++
++    private java.util.Map<String, Object> decodeJwtPayload(String jwt) {
++        try {
++            var parts = jwt.split("\\.");
++            if (parts.length < 2) return null;
++            var payload = new String(java.util.Base64.getUrlDecoder().decode(parts[1]),
++                    java.nio.charset.StandardCharsets.UTF_8);
++            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
++            return mapper.readValue(payload,
++                    new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
++        } catch (Exception e) {
++            monitor.debug("[decodeJwtPayload] failed to decode: " + e.getMessage());
++            return null;
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/data-protocols/dsp/dsp-core/dsp-http-core/src/main/java/org/eclipse/edc/protocol/dsp/http/dispatcher/DspHttpRemoteMessageDispatcherImpl.java b/data-protocols/dsp/dsp-core/dsp-http-core/src/main/java/org/eclipse/edc/protocol/dsp/http/dispatcher/DspHttpRemoteMessageDispatcherImpl.java
+index c9a9737e5..dc82a15de 100644
+--- a/data-protocols/dsp/dsp-core/dsp-http-core/src/main/java/org/eclipse/edc/protocol/dsp/http/dispatcher/DspHttpRemoteMessageDispatcherImpl.java
++++ b/data-protocols/dsp/dsp-core/dsp-http-core/src/main/java/org/eclipse/edc/protocol/dsp/http/dispatcher/DspHttpRemoteMessageDispatcherImpl.java
+@@ -79,8 +79,11 @@ public class DspHttpRemoteMessageDispatcherImpl implements DspHttpRemoteMessageD
+ 
+     @Override
+     public <T, M extends ProtocolRemoteMessage> CompletableFuture<StatusResult<T>> dispatch(String participantContextId, Class<T> responseType, M message) {
++        System.out.println("[dispatch] === dispatch() invoked | messageType=" + message.getClass().getSimpleName() + " | participantContextId=" + participantContextId);
++
+         var handler = (MessageHandler<M, T>) this.handlers.get(message.getClass());
+         if (handler == null) {
++            System.out.println("[dispatch] ERROR: no handler found for " + message.getClass().getSimpleName());
+             return failedFuture(new EdcException(format("No DSP message dispatcher found for message type %s", message.getClass())));
+         }
+ 
+@@ -89,6 +92,8 @@ public class DspHttpRemoteMessageDispatcherImpl implements DspHttpRemoteMessageD
+         var tokenParametersBuilder = TokenParameters.Builder.newInstance();
+ 
+         var policyScope = policyScopes.get(message.getClass());
++        System.out.println("[dispatch] policyScope found: " + (policyScope != null));
++
+         if (policyScope != null) {
+             var requestScopeBuilder = RequestScope.Builder.newInstance();
+             var requestContext = RequestContext.Builder.newInstance()
+@@ -99,18 +104,29 @@ public class DspHttpRemoteMessageDispatcherImpl implements DspHttpRemoteMessageD
+             var context = policyScope.contextProvider.instantiate(requestContext, requestScopeBuilder);
+             var policyProvider = (Function<M, Policy>) policyScope.policyProvider;
+             policyEngine.evaluate(policyProvider.apply(message), context);
++            System.out.println("[dispatch] policyEngine.evaluate() done");
+ 
+             // catalog request messages can carry additional, user-supplied scopes
++            System.out.println("[dispatch] instanceof CatalogRequestMessage: " + (message instanceof CatalogRequestMessage));
+             if (message instanceof CatalogRequestMessage catalogRequestMessage) {
+-                catalogRequestMessage.getAdditionalScopes().forEach(requestScopeBuilder::scope);
++                var additionalScopes = catalogRequestMessage.getAdditionalScopes();
++                System.out.println("[dispatch] additionalScopes on CatalogRequestMessage (" + additionalScopes.size() + "): " + additionalScopes);
++                additionalScopes.forEach(requestScopeBuilder::scope);
++                System.out.println("[dispatch] additionalScopes appended to requestScopeBuilder");
+             }
+ 
+             var scopes = requestScopeBuilder.build().getScopes();
++            System.out.println("[dispatch] Final scopes for token claim (" + scopes.size() + "): " + scopes);
+ 
+-            // Only add the scope claim if there are scopes returned from the policy engine evaluation
+             if (!scopes.isEmpty()) {
+-                tokenParametersBuilder.claims(SCOPE_CLAIM, String.join(" ", scopes));
++                var scopeClaim = String.join(" ", scopes);
++                System.out.println("[dispatch] Writing SCOPE_CLAIM to token: " + scopeClaim);
++                tokenParametersBuilder.claims(SCOPE_CLAIM, scopeClaim);
++            } else {
++                System.out.println("[dispatch] WARNING: scopes empty — SCOPE_CLAIM will NOT be written to token!");
+             }
++        } else {
++            System.out.println("[dispatch] WARNING: no policyScope registered for " + message.getClass().getSimpleName() + " — token will have no scope claim!");
+         }
+ 
+         return audienceResolver.resolve(message)
+diff --git a/extensions/common/iam/decentralized-claims/decentralized-claims-core/src/main/java/org/eclipse/edc/iam/decentralizedclaims/core/scope/DefaultScopeMappingFunction.java b/extensions/common/iam/decentralized-claims/decentralized-claims-core/src/main/java/org/eclipse/edc/iam/decentralizedclaims/core/scope/DefaultScopeMappingFunction.java
+index a42482c80..eeb2a7982 100644
+--- a/extensions/common/iam/decentralized-claims/decentralized-claims-core/src/main/java/org/eclipse/edc/iam/decentralizedclaims/core/scope/DefaultScopeMappingFunction.java
++++ b/extensions/common/iam/decentralized-claims/decentralized-claims-core/src/main/java/org/eclipse/edc/iam/decentralizedclaims/core/scope/DefaultScopeMappingFunction.java
+@@ -36,25 +36,45 @@ public class DefaultScopeMappingFunction implements PolicyValidatorRule<RequestP
+ 
+     @Override
+     public Boolean apply(Policy policy, RequestPolicyContext context) {
++        var protocol = context.requestContext().getMessage().getProtocol();
++        System.out.println("[DefaultScopeMappingFunction] === apply() invoked ===");
++        System.out.println("[DefaultScopeMappingFunction] Protocol from message: " + protocol);
++
+         var defaultScopes = scopeRegistry.getDefaultScopes();
+         if (defaultScopes.failed()) {
++            System.out.println("[DefaultScopeMappingFunction] ERROR: Failed to retrieve default scopes: " + defaultScopes.getFailureMessages());
+             context.reportProblem("Failed to retrieve default scopes: " + defaultScopes.getFailureMessages());
+             return false;
+         }
+-        var defaultScopeList = defaultScopes.getContent().stream()
++
++        var allRegisteredScopes = defaultScopes.getContent();
++        System.out.println("[DefaultScopeMappingFunction] All registered scopes in registry (" + allRegisteredScopes.size() + "):");
++        allRegisteredScopes.forEach(s -> System.out.println("  -> id=" + s.getId()
++                + " | value=" + s.getValue()
++                + " | type=" + s.getType()
++                + " | profile=" + s.getProfile()
++                + " | prefixMapping=" + s.getPrefixMapping()));
++
++        var defaultScopeList = allRegisteredScopes.stream()
+                 .filter(scope -> filterScope(scope, context))
+                 .map(DcpScope::getValue).toList();
++        System.out.println("[DefaultScopeMappingFunction] Scopes after profile filter (profile='" + protocol + "' or '" + WILDCARD + "') (" + defaultScopeList.size() + "): " + defaultScopeList);
++
+         var requestScopeBuilder = context.requestScopeBuilder();
+         var rq = requestScopeBuilder.build();
+         var existingScope = rq.getScopes();
++        System.out.println("[DefaultScopeMappingFunction] Existing scopes on request before merge (" + existingScope.size() + "): " + existingScope);
++
+         var newScopes = new HashSet<>(defaultScopeList);
+         newScopes.addAll(existingScope);
++        System.out.println("[DefaultScopeMappingFunction] Final merged scopes (" + newScopes.size() + "): " + newScopes);
++
+         requestScopeBuilder.scopes(newScopes);
++        System.out.println("[DefaultScopeMappingFunction] === apply() done ===");
+         return true;
+     }
+ 
+-
+     boolean filterScope(DcpScope scope, RequestPolicyContext context) {
+         return scope.getProfile().equals(WILDCARD) || scope.getProfile().equals(context.requestContext().getMessage().getProtocol());
+     }
+-}
++}
+\ No newline at end of file
+diff --git a/extensions/common/iam/decentralized-claims/decentralized-claims-core/src/main/java/org/eclipse/edc/iam/decentralizedclaims/core/scope/DynamicScopeExtractor.java b/extensions/common/iam/decentralized-claims/decentralized-claims-core/src/main/java/org/eclipse/edc/iam/decentralizedclaims/core/scope/DynamicScopeExtractor.java
+index a9ab07d92..b7e1be4a1 100644
+--- a/extensions/common/iam/decentralized-claims/decentralized-claims-core/src/main/java/org/eclipse/edc/iam/decentralizedclaims/core/scope/DynamicScopeExtractor.java
++++ b/extensions/common/iam/decentralized-claims/decentralized-claims-core/src/main/java/org/eclipse/edc/iam/decentralizedclaims/core/scope/DynamicScopeExtractor.java
+@@ -15,8 +15,14 @@
+ package org.eclipse.edc.iam.decentralizedclaims.core.scope;
+ 
+ import org.eclipse.edc.connector.controlplane.catalog.spi.CatalogRequestMessage;
++import org.eclipse.edc.connector.controlplane.contract.spi.types.agreement.ContractAgreementMessage;
++import org.eclipse.edc.connector.controlplane.contract.spi.types.agreement.ContractAgreementVerificationMessage;
++import org.eclipse.edc.connector.controlplane.contract.spi.types.agreement.ContractNegotiationEventMessage;
+ import org.eclipse.edc.connector.controlplane.contract.spi.types.negotiation.ContractRequestMessage;
++import org.eclipse.edc.connector.controlplane.transfer.spi.types.protocol.TransferCompletionMessage;
+ import org.eclipse.edc.connector.controlplane.transfer.spi.types.protocol.TransferRequestMessage;
++import org.eclipse.edc.connector.controlplane.transfer.spi.types.protocol.TransferStartMessage;
++import org.eclipse.edc.connector.controlplane.transfer.spi.types.protocol.TransferTerminationMessage;
+ import org.eclipse.edc.iam.decentralizedclaims.spi.scope.DcpScope;
+ import org.eclipse.edc.iam.decentralizedclaims.spi.scope.DcpScopeRegistry;
+ import org.eclipse.edc.iam.decentralizedclaims.spi.scope.ScopeExtractor;
+@@ -31,7 +37,20 @@ import java.util.stream.Collectors;
+  * Extracts scopes dynamically from the DCP scope registry based on the request context.
+  */
+ public class DynamicScopeExtractor implements ScopeExtractor {
+-    private static final Set<Class<? extends RemoteMessage>> SUPPORTED_MESSAGES = Set.of(CatalogRequestMessage.class, ContractRequestMessage.class, TransferRequestMessage.class);
++    private static final Set<Class<? extends RemoteMessage>> SUPPORTED_MESSAGES = Set.of(
++            // Catalog
++            CatalogRequestMessage.class,
++            // Contract Negotiation
++            ContractRequestMessage.class,
++            ContractAgreementMessage.class,
++            ContractAgreementVerificationMessage.class,
++            ContractNegotiationEventMessage.class,
++            // Transfer Process
++            TransferRequestMessage.class,
++            TransferStartMessage.class,      // <--- Added (The one failing now)
++            TransferCompletionMessage.class, // <--- Add to prevent the next fail
++            TransferTerminationMessage.class // <--- Add to prevent fail on errors
++    );
+     private final DcpScopeRegistry registry;
+ 
+     public DynamicScopeExtractor(DcpScopeRegistry registry) {
+@@ -40,26 +59,61 @@ public class DynamicScopeExtractor implements ScopeExtractor {
+ 
+     @Override
+     public Set<String> extractScopes(Object leftValue, Operator operator, Object rightValue, RequestPolicyContext context) {
++        var message = context.requestContext().getMessage();
++
++        // DEBUG: See if the extractor is even called and for what message
++        System.out.println("[DCP-DEBUG] DynamicScopeExtractor triggered for message class: " + message.getClass().getName());
++        System.out.println("[DCP-DEBUG] LeftValue: " + leftValue + " (Type: " + (leftValue != null ? leftValue.getClass().getSimpleName() : "null") + ")");
++
+         // extract only for supported messages
+-        if (!SUPPORTED_MESSAGES.contains(context.requestContext().getMessage().getClass())) {
++        if (!SUPPORTED_MESSAGES.contains(message.getClass())) {
++            System.out.println("[DCP-DEBUG] Message type NOT supported. Supported: " + SUPPORTED_MESSAGES.stream().map(Class::getSimpleName).collect(Collectors.joining(", ")));
+             return Set.of();
+         }
++
+         var result = registry.getScopeMapping();
+         if (result.failed()) {
++            System.out.println("[DCP-DEBUG] Registry lookup failed: " + result.getFailureMessages());
+             context.reportProblem("Failed to get scope mapping: " + result.getFailureMessages());
+             return Set.of();
+         }
+-        return result.getContent().stream().filter(scope -> filterScope(scope, leftValue, context))
++
++        var scopesFromRegistry = result.getContent();
++        System.out.println("[DCP-DEBUG] Total scopes found in registry to check: " + scopesFromRegistry.size());
++
++        var extracted = scopesFromRegistry.stream()
++                .filter(scope -> {
++                    boolean match = filterScope(scope, leftValue, context);
++                    if (match) {
++                        System.out.println("[DCP-DEBUG] MATCH FOUND for scope ID: " + scope.getId() + " -> " + scope.getValue());
++                    }
++                    return match;
++                })
+                 .map(DcpScope::getValue)
+                 .collect(Collectors.toSet());
+ 
++        System.out.println("[DCP-DEBUG] Extracted scope set size: " + extracted.size());
++        return extracted;
+     }
+ 
+     private boolean filterScope(DcpScope scope, Object leftValue, RequestPolicyContext context) {
+         if (leftValue instanceof String leftOperand) {
+-            return (leftOperand.startsWith(scope.getPrefixMapping())) &&
+-                    (scope.getProfile().equals(DcpScope.WILDCARD) || scope.getProfile().equals(context.requestContext().getMessage().getProtocol()));
++            String protocol = context.requestContext().getMessage().getProtocol();
++
++            boolean prefixMatch = leftOperand.startsWith(scope.getPrefixMapping());
++            boolean profileMatch = scope.getProfile().equals(DcpScope.WILDCARD) || scope.getProfile().equals(protocol);
++
++            if (!prefixMatch) {
++                System.out.println("[DCP-DEBUG] Filter Scope [" + scope.getId() + "] fail: Prefix " + leftOperand + " does not start with " + scope.getPrefixMapping());
++            }
++            if (!profileMatch) {
++                System.out.println("[DCP-DEBUG] Filter Scope [" + scope.getId() + "] fail: Profile " + scope.getProfile() + " does not match protocol " + protocol);
++            }
++
++            return prefixMatch && profileMatch;
+         } else {
++            // DEBUG: This is a common point of failure if JSON-LD is used
++            System.out.println("[DCP-DEBUG] Filter Scope [" + scope.getId() + "] fail: leftValue is NOT a String. It is: " + (leftValue != null ? leftValue.getClass().getName() : "null"));
+             return false;
+         }
+     }
+diff --git a/extensions/control-plane/api/management-api-v5/catalog-api-v5/src/main/java/org/eclipse/edc/connector/controlplane/api/management/catalog/v5/CatalogApiV5Controller.java b/extensions/control-plane/api/management-api-v5/catalog-api-v5/src/main/java/org/eclipse/edc/connector/controlplane/api/management/catalog/v5/CatalogApiV5Controller.java
+index 79e1a2bca..0afb4c8b9 100644
+--- a/extensions/control-plane/api/management-api-v5/catalog-api-v5/src/main/java/org/eclipse/edc/connector/controlplane/api/management/catalog/v5/CatalogApiV5Controller.java
++++ b/extensions/control-plane/api/management-api-v5/catalog-api-v5/src/main/java/org/eclipse/edc/connector/controlplane/api/management/catalog/v5/CatalogApiV5Controller.java
+@@ -78,7 +78,14 @@ public class CatalogApiV5Controller implements CatalogApiV5 {
+         var request = transformerRegistry.transform(requestBody, CatalogRequest.class)
+                 .orElseThrow(InvalidRequestException::new);
+ 
++        System.out.println("[CatalogApiV5] requestCatalog | participantContextId=" + participantContextId + " | body=" + requestBody);
++        System.out.println("[CatalogApiV5] After transform | protocol=" + request.getProtocol()
++                + " | counterPartyId=" + request.getCounterPartyId()
++                + " | additionalScopes=" + request.getAdditionalScopes());
++
+         var scopes = request.getAdditionalScopes().toArray(new String[0]);
++        System.out.println("[CatalogApiV5] Scopes array passed to service: " + java.util.Arrays.toString(scopes));
++
+         service.requestCatalog(participantContext, request.getCounterPartyId(), request.getCounterPartyAddress(), request.getProtocol(), request.getQuerySpec(), scopes)
+                 .whenComplete((result, throwable) -> {
+                     try {
+@@ -104,6 +111,8 @@ public class CatalogApiV5Controller implements CatalogApiV5 {
+         var request = transformerRegistry.transform(requestBody, DatasetRequest.class)
+                 .orElseThrow(InvalidRequestException::new);
+ 
++        System.out.println("[CatalogApiV5] getDataset | participantContextId=" + participantContextId + " | body=" + requestBody);
++
+         service.requestDataset(participantContext, request.getId(), request.getCounterPartyId(), request.getCounterPartyAddress(), request.getProtocol())
+                 .whenComplete((result, throwable) -> {
+                     try {
