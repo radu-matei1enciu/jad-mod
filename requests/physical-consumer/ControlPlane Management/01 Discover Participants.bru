@@ -1,0 +1,103 @@
+meta {
+  name: 01 Discover Participants
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{virtualCpBaseUrl}}/v5beta/participants
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{accessToken}}
+  Accept: application/json
+}
+
+script:pre-request {
+  if (!bru.getVar("accessToken")) {
+    throw new Error("Missing accessToken. Run 00 Get Management Token first.");
+  }
+
+  if (!bru.getVar("virtualCpBaseUrl")) {
+    bru.setVar("virtualCpBaseUrl", "http://localhost:18081/api/mgmt");
+  }
+
+  if (!bru.getVar("providerIndex")) {
+    bru.setVar("providerIndex", "0");
+  }
+
+  if (!bru.getVar("providerProtocolBaseUrl")) {
+    bru.setVar("providerProtocolBaseUrl", "http://controlplane.edc-v.svc.cluster.local:8082/api/dsp");
+  }
+
+  if (!bru.getVar("protocol")) {
+    bru.setVar("protocol", "dataspace-protocol-http:2025-1");
+  }
+
+  console.log("Virtual CP base URL:", bru.getVar("virtualCpBaseUrl"));
+  console.log("Provider index:", bru.getVar("providerIndex"));
+  console.log("Provider protocol base URL:", bru.getVar("providerProtocolBaseUrl"));
+}
+
+script:post-response {
+  test("Discover participants succeeded", function () {
+    expect(res.getStatus()).to.be.within(200, 299);
+  });
+
+  const raw = res.getBody();
+
+  let body;
+  try {
+    body = typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch (e) {
+    console.log("Raw response:", raw);
+    throw new Error("Could not parse participants response as JSON");
+  }
+
+  if (!Array.isArray(body) || body.length === 0) {
+    throw new Error("No virtual participants found.");
+  }
+
+  console.log("Participants found:");
+  console.log(JSON.stringify(body, null, 2));
+
+  const providerIndex = Number(bru.getVar("providerIndex") || 0);
+
+  if (Number.isNaN(providerIndex) || providerIndex < 0) {
+    throw new Error("providerIndex must be a valid non-negative number.");
+  }
+
+  const selected = body[providerIndex];
+
+  if (!selected) {
+    throw new Error("Could not select provider at providerIndex=" + providerIndex + ". Participants found: " + body.length);
+  }
+
+  const providerParticipantId = selected["@id"] || selected.id;
+  const providerDid = selected.identity || selected["edc:identity"];
+
+  if (!providerParticipantId) {
+    throw new Error("Selected provider has no @id.");
+  }
+
+  if (!providerDid) {
+    throw new Error("Selected provider has no identity/DID.");
+  }
+
+  const providerProtocolBaseUrl =
+    bru.getVar("providerProtocolBaseUrl") ||
+    "http://controlplane.edc-v.svc.cluster.local:8082/api/dsp";
+
+  const providerProtocolUrl = `${providerProtocolBaseUrl}/${providerParticipantId}/2025-1`;
+
+  bru.setVar("providerParticipantId", providerParticipantId);
+  bru.setVar("providerDid", providerDid);
+  bru.setVar("providerProtocolUrl", providerProtocolUrl);
+
+  console.log("Selected provider index:", providerIndex);
+  console.log("Selected provider participant ID:", providerParticipantId);
+  console.log("Selected provider DID:", providerDid);
+  console.log("Selected provider protocol URL:", providerProtocolUrl);
+}

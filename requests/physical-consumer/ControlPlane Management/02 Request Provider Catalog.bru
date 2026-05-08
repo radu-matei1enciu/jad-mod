@@ -1,5 +1,5 @@
 meta {
-  name: 03 Request Provider Catalog
+  name: 02 Request Provider Catalog
   type: http
   seq: 3
 }
@@ -34,6 +34,12 @@ body:json {
 }
 
 script:pre-request {
+
+    console.log("ENV CHECK providerParticipantId:", bru.getVar("providerParticipantId"));
+    console.log("ENV CHECK providerDid:", bru.getVar("providerDid"));
+    console.log("ENV CHECK providerProtocolUrl:", bru.getVar("providerProtocolUrl"));
+    console.log("ENV CHECK consumerCpBaseUrl:", bru.getVar("consumerCpBaseUrl"));
+
   if (!bru.getVar("accessToken")) {
     throw new Error("Missing accessToken. Run 00 Get Management Token first.");
   }
