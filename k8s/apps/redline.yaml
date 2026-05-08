@@ -32,8 +32,8 @@ spec:
     spec:
       containers:
         - name: redline
-          image: redline:local
-          imagePullPolicy: Never
+          image: ghcr.io/radu-matei1enciu/redline-mod:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8081
               name: http
