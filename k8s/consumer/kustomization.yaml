@@ -9,5 +9,3 @@ resources:
   - controlplane-config.yaml
   - controlplane.yaml
   - controlplane-seed.yaml
-  - dataplane-config.yaml
-  - dataplane.yaml
