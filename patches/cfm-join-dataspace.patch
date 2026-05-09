@@ -1,0 +1,201 @@
+diff --git a/common/model/model.go b/common/model/model.go
+index 07a5ee1..081aec8 100644
+--- a/common/model/model.go
++++ b/common/model/model.go
+@@ -24,8 +24,9 @@ const (
+ 	DataPlaneType         VPAType = "cfm.dataplane"
+ 	ParticipantIdentifier         = "cfm.participant.id"
+ 
+-	VPADeployType  OrchestrationType = "cfm.orchestration.vpa.deploy"
+-	VPADisposeType OrchestrationType = "cfm.orchestration.vpa.dispose"
++	VPADeployType        OrchestrationType = "cfm.orchestration.vpa.deploy"
++	VPADisposeType       OrchestrationType = "cfm.orchestration.vpa.dispose"
++	VPAJoinDataspaceType OrchestrationType = "cfm.orchestration.vpa.join"
+ 
+ 	VPAData        = "cfm.vpa.data"
+ 	CredentialData = "cfm.vpa.credentials"
+diff --git a/pmanager/api/provision.go b/pmanager/api/provision.go
+index 4e6a1aa..b5a2c71 100644
+--- a/pmanager/api/provision.go
++++ b/pmanager/api/provision.go
+@@ -117,6 +117,7 @@ const (
+ 
+ 	DeployDiscriminator  = Discriminator(model.VPADeployType)
+ 	DisposeDiscriminator = Discriminator(model.VPADisposeType)
++	JoinDiscriminator    = Discriminator(model.VPAJoinDataspaceType)
+ )
+ 
+ type ActivityResult struct {
+diff --git a/pmanager/natsorchestration/activity.go b/pmanager/natsorchestration/activity.go
+index 34c4b2c..a7eed50 100644
+--- a/pmanager/natsorchestration/activity.go
++++ b/pmanager/natsorchestration/activity.go
+@@ -180,6 +180,8 @@ func (e *NatsActivityExecutor) processMessage(ctx context.Context, message jetst
+ 		result = e.ActivityProcessor.ProcessDeploy(activityContext)
+ 	} else if activityContext.Discriminator() == api.DisposeDiscriminator {
+ 		result = e.ActivityProcessor.ProcessDispose(activityContext)
++	} else if activityContext.Discriminator() == api.JoinDiscriminator {
++		result = e.ActivityProcessor.ProcessDeploy(activityContext)
+ 	} else {
+ 		result = e.ActivityProcessor.Process(activityContext)
+ 	}
+diff --git a/tmanager/api/service.go b/tmanager/api/service.go
+index 00b7e88..f149e8a 100644
+--- a/tmanager/api/service.go
++++ b/tmanager/api/service.go
+@@ -47,6 +47,7 @@ type ParticipantProfileService interface {
+ 	QueryProfilesCount(ctx context.Context, predicate query.Predicate) (int64, error)
+ 	DeployProfile(ctx context.Context, tenantID string, deployment *NewParticipantProfileDeployment) (*ParticipantProfile, error)
+ 	DisposeProfile(ctx context.Context, tenantID string, participantID string) error
++	JoinDataspace(ctx context.Context, tenantID string, participantID string, dataspaceProfileID string) (*ParticipantProfile, error)
+ }
+ 
+ // DataspaceProfileService performs dataspace profile operations.
+diff --git a/tmanager/core/assembly.go b/tmanager/core/assembly.go
+index 9e5e673..65b5292 100644
+--- a/tmanager/core/assembly.go
++++ b/tmanager/core/assembly.go
+@@ -91,6 +91,7 @@ func (a *TMCoreServiceAssembly) Init(context *system.InitContext) error {
+ 	}
+ 	registry.Register(model.VPADeployType, deploymentHandler.handleDeploy)
+ 	registry.Register(model.VPADisposeType, deploymentHandler.handleDispose)
++	registry.Register(model.VPAJoinDataspaceType, deploymentHandler.handleDeploy)
+ 
+ 	return nil
+ }
+diff --git a/tmanager/core/service_participant.go b/tmanager/core/service_participant.go
+index 3e4fe1f..d7fc2b7 100644
+--- a/tmanager/core/service_participant.go
++++ b/tmanager/core/service_participant.go
+@@ -344,3 +344,75 @@ func (h vpaCallbackHandler) handle(
+ 		return nil
+ 	})
+ }
++
++func (p participantService) JoinDataspace(ctx context.Context, tenantID string, participantID string, dataspaceProfileID string) (*api.ParticipantProfile, error) {
++	return store.Trx[api.ParticipantProfile](p.trxContext).AndReturn(ctx, func(ctx context.Context) (*api.ParticipantProfile, error) {
++		profile, err := p.participantStore.FindByID(ctx, participantID)
++		if err != nil {
++			return nil, err
++		}
++		if profile.TenantID != tenantID {
++			return nil, types.ErrNotFound
++		}
++
++		dProfile, err := p.dataspaceStore.FindByID(ctx, dataspaceProfileID)
++		if err != nil {
++			return nil, err
++		}
++
++		for _, id := range profile.DataspaceProfileIDs {
++			if id == dataspaceProfileID {
++				return nil, fmt.Errorf("participant %s already in dataspace profile %s", participantID, dataspaceProfileID)
++			}
++		}
++
++		specs := generateCredentialSpecs(profile.ParticipantRoles, []api.DataspaceProfile{*dProfile})
++		if len(specs) == 0 {
++			return nil, fmt.Errorf("no credential specs found for dataspace profile %s", dataspaceProfileID)
++		}
++
++		participantContextID, err := resolveParticipantContextID(profile)
++		if err != nil {
++			return nil, err
++		}
++
++		oManifest := model.OrchestrationManifest{
++			ID:                uuid.New().String(),
++			CorrelationID:     profile.ID,
++			OrchestrationType: model.VPAJoinDataspaceType,
++			Payload:           make(map[string]any),
++		}
++		oManifest.Payload[model.ParticipantIdentifier] = profile.Identifier
++		oManifest.Payload[model.CredentialData] = specs
++		oManifest.Payload["clientID.apiAccess"] = participantContextID
++
++		profile.DataspaceProfileIDs = append(profile.DataspaceProfileIDs, dataspaceProfileID)
++		err = p.participantStore.Update(ctx, profile)
++		if err != nil {
++			return nil, fmt.Errorf("error updating participant %s for dataspace join: %w", participantID, err)
++		}
++
++		err = p.provisionClient.Send(ctx, oManifest)
++		if err != nil {
++			return nil, fmt.Errorf("error sending join orchestration for participant %s: %w", participantID, err)
++		}
++
++		return profile, nil
++	})
++}
++
++func resolveParticipantContextID(profile *api.ParticipantProfile) (string, error) {
++	stateData, found := profile.Properties[model.VPAStateData]
++	if !found {
++		return "", fmt.Errorf("participant %s has no VPA state data — was initial deployment completed?", profile.ID)
++	}
++	stateMap, ok := stateData.(map[string]any)
++	if !ok {
++		return "", fmt.Errorf("invalid VPA state data type for participant %s", profile.ID)
++	}
++	contextID, ok := stateMap["participantContextId"].(string)
++	if !ok || contextID == "" {
++		return "", fmt.Errorf("no participantContextId in VPA state data for participant %s — was initial deployment completed?", profile.ID)
++	}
++	return contextID, nil
++}
+diff --git a/tmanager/handler/assembly.go b/tmanager/handler/assembly.go
+index 317b9ee..41adfd7 100644
+--- a/tmanager/handler/assembly.go
++++ b/tmanager/handler/assembly.go
+@@ -201,6 +201,23 @@ func (h *HandlerServiceAssembly) registerParticipantRoutes(r chi.Router, handler
+ 				}
+ 				handler.disposeParticipantProfile(w, req, tenantID, participantID)
+ 			})
++			r.Route("/dataspaces/{dataspaceProfileID}/join", func(r chi.Router) {
++				r.Post("/", func(w http.ResponseWriter, req *http.Request) {
++					tenantID, found := handler.ExtractPathVariable(w, req, "tenantID")
++					if !found {
++						return
++					}
++					participantID, found := handler.ExtractPathVariable(w, req, "participantID")
++					if !found {
++						return
++					}
++					dataspaceProfileID, found := handler.ExtractPathVariable(w, req, "dataspaceProfileID")
++					if !found {
++						return
++					}
++					handler.joinDataspace(w, req, tenantID, participantID, dataspaceProfileID)
++				})
++			})
+ 		})
+ 	})
+ }
+diff --git a/tmanager/handler/handlersv1alpha1.go b/tmanager/handler/handlersv1alpha1.go
+index e4b3eac..e1e7c32 100644
+--- a/tmanager/handler/handlersv1alpha1.go
++++ b/tmanager/handler/handlersv1alpha1.go
+@@ -390,3 +390,23 @@ func (h *TMHandler) deployDataspaceProfile(w http.ResponseWriter, req *http.Requ
+ func (h *TMHandler) health(w http.ResponseWriter, _ *http.Request) {
+ 	h.ResponseOK(w, response{Message: "OK"})
+ }
++
++func (h *TMHandler) joinDataspace(
++	w http.ResponseWriter,
++	req *http.Request,
++	tenantID string,
++	participantID string,
++	dataspaceProfileID string) {
++
++	if h.InvalidMethod(w, req, http.MethodPost) {
++		return
++	}
++
++	profile, err := h.participantService.JoinDataspace(req.Context(), tenantID, participantID, dataspaceProfileID)
++	if err != nil {
++		h.HandleError(w, err)
++		return
++	}
++
++	h.ResponseAccepted(w, v1alpha1.ToParticipantProfile(profile))
++}
