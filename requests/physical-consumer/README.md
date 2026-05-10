@@ -33,8 +33,6 @@ providerDid
 providerProtocolUrl
 ```
 
-By default it filters for participant IDs/DIDs containing `provider`. If you have multiple providers, set `providerFilter`, `providerIndex`, or `preferredProviderParticipantId` in the `local` environment.
-
 ## Run order
 
 1. `00 Get Management Token`
@@ -44,9 +42,3 @@ By default it filters for participant IDs/DIDs containing `provider`. If you hav
 5. `04 Initiate Contract Negotiation`
 6. Re-run `05 Get Contract Negotiation By ID` until `FINALIZED`
 7. `06 Get Contract Agreement`
-8. `07 Initiate Transfer`
-9. Re-run `08 Get Transfer Process By ID` until `STARTED`
-10. `09 Query Cached EDRs`
-11. `10 Get EDR DataAddress`
-12. `11 Download Data`
-13. Optional: `12 Debug Saved Variables`

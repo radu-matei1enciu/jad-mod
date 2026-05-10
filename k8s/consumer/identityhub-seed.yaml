@@ -117,7 +117,6 @@ spec:
             - name: STS_CLIENT_ID
               value: "did:web:identityhub.consumer.svc.cluster.local%3A7083:physical-consumer"
 
-            # Must match edc.iam.sts.oauth.client.secret.alias in controlplane config.
             # The value stored at this alias will be the IdentityHub-generated STS secret.
             - name: STS_VAULT_ALIAS
               value: "physical-consumer-sts-client-secret"
@@ -164,11 +163,11 @@ spec:
                 | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
 
               if [ -z "$PROVISIONER_TOKEN" ]; then
-                echo "✗ Failed to get provisioner token"
+                echo " Failed to get provisioner token"
                 exit 1
               fi
 
-              echo "✓ Provisioner token received"
+              echo " Provisioner token received"
 
               ADMIN_TOKEN=$(curl -sf -X POST \
                 "${KC_HOST}/realms/${KC_REALM}/protocol/openid-connect/token" \
@@ -184,7 +183,7 @@ spec:
                 exit 1
               fi
 
-              echo "✓ Admin token received"
+              echo " Admin token received"
 
               echo ""
               echo "================================================"
@@ -213,10 +212,10 @@ spec:
               if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 201 ]; then
                 echo "✓ Consumer holder created in IssuerService"
               elif [ "$HTTP_STATUS" -eq 409 ]; then
-                echo "⚠ Consumer holder already exists, skipping"
-                echo "⚠ This is usually fine because IssuerService is shared in edc-v and survives consumer namespace resets."
+                echo " Consumer holder already exists, skipping"
+                echo " This is usually fine because IssuerService is shared in edc-v and survives consumer namespace resets."
               else
-                echo "✗ Unexpected HTTP status creating holder: ${HTTP_STATUS}"
+                echo " Unexpected HTTP status creating holder: ${HTTP_STATUS}"
                 echo "Body: ${BODY}"
                 exit 1
               fi
@@ -277,16 +276,16 @@ spec:
               done
 
               if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 201 ]; then
-                echo "✓ Participant context created in consumer IH"
+                echo " Participant context created in consumer IH"
                 echo "IH response: ${BODY}"
               elif [ "$HTTP_STATUS" -eq 409 ]; then
-                echo "⚠ Participant context already exists."
-                echo "✗ Cannot retrieve generated STS clientSecret from a 409 response."
-                echo "✗ On a fresh consumer namespace this should not happen."
-                echo "✗ Check whether the consumer IdentityHub database is really fresh, or use a new PARTICIPANT_CONTEXT_ID."
+                echo " Participant context already exists."
+                echo " Cannot retrieve generated STS clientSecret from a 409 response."
+                echo " On a fresh consumer namespace this should not happen."
+                echo " Check whether the consumer IdentityHub database is really fresh, or use a new PARTICIPANT_CONTEXT_ID."
                 exit 1
               else
-                echo "✗ Unexpected HTTP status creating participant context after retries: ${HTTP_STATUS}"
+                echo " Unexpected HTTP status creating participant context after retries: ${HTTP_STATUS}"
                 echo "Body: ${BODY}"
                 exit 1
               fi
@@ -303,17 +302,17 @@ spec:
               fi
 
               if [ -z "${IH_STS_CLIENT_SECRET}" ]; then
-                echo "✗ IdentityHub did not return an STS clientSecret"
+                echo " IdentityHub did not return an STS clientSecret"
                 echo "Body: ${BODY}"
                 exit 1
               fi
 
-              echo "✓ IdentityHub returned STS client credentials"
+              echo " IdentityHub returned STS client credentials"
               echo "IH STS clientId: ${IH_STS_CLIENT_ID}"
 
               if [ -n "${IH_STS_CLIENT_ID}" ] && [ "${IH_STS_CLIENT_ID}" != "${STS_CLIENT_ID}" ]; then
-                echo "⚠ IdentityHub returned clientId '${IH_STS_CLIENT_ID}', but expected '${STS_CLIENT_ID}'."
-                echo "⚠ Make sure edc.iam.sts.oauth.client.id in the consumer controlplane matches the IdentityHub clientId."
+                echo " IdentityHub returned clientId '${IH_STS_CLIENT_ID}', but expected '${STS_CLIENT_ID}'."
+                echo " Make sure edc.iam.sts.oauth.client.id in the consumer controlplane matches the IdentityHub clientId."
               fi
 
               echo ""
@@ -328,9 +327,9 @@ spec:
                 -d "{\"data\": {\"content\": \"${IH_STS_CLIENT_SECRET}\"}}")
 
               if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
-                echo "✓ IH STS secret written to vault at secret/data/${STS_VAULT_ALIAS}"
+                echo " IH STS secret written to vault at secret/data/${STS_VAULT_ALIAS}"
               else
-                echo "✗ Failed to write IH STS secret to Vault: HTTP ${HTTP_STATUS}"
+                echo " Failed to write IH STS secret to Vault: HTTP ${HTTP_STATUS}"
                 exit 1
               fi
 
@@ -361,9 +360,9 @@ spec:
               BODY=$(echo "${RESPONSE}" | sed '$d')
 
               if [ "$HTTP_STATUS" -eq 201 ]; then
-                echo "✓ Credential issuance request sent"
+                echo " Credential issuance request sent"
               else
-                echo "✗ Unexpected HTTP status requesting credential: ${HTTP_STATUS}"
+                echo " Unexpected HTTP status requesting credential: ${HTTP_STATUS}"
                 echo "Body: ${BODY}"
                 exit 1
               fi
@@ -379,7 +378,7 @@ spec:
 
               while [ "${STATUS}" != "ISSUED" ]; do
                 if [ "${RETRY}" -ge "${MAX_RETRIES}" ]; then
-                  echo "✗ Credential not ISSUED after ${MAX_RETRIES} attempts"
+                  echo " Credential not ISSUED after ${MAX_RETRIES} attempts"
                   exit 1
                 fi
 
@@ -391,7 +390,7 @@ spec:
                 BODY=$(echo "${RESPONSE}" | sed '$d')
 
                 if [ "${HTTP_STATUS}" -ne 200 ]; then
-                  echo "✗ Poll failed: HTTP ${HTTP_STATUS}"
+                  echo " Poll failed: HTTP ${HTTP_STATUS}"
                   echo "Body: ${BODY}"
                   exit 1
                 fi
@@ -402,7 +401,7 @@ spec:
                 echo "  Body: ${BODY}"
 
                 if [ "${STATUS}" = "ERROR" ]; then
-                  echo "✗ Credential request entered ERROR state"
+                  echo " Credential request entered ERROR state"
                   exit 1
                 fi
 
@@ -410,7 +409,7 @@ spec:
                 sleep 5
               done
 
-              echo "✓ CatenaMembershipCredential is ISSUED"
+              echo " CatenaMembershipCredential is ISSUED"
               echo ""
               echo "================================================"
               echo "IdentityHub seeding completed successfully!"

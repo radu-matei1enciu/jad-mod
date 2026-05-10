@@ -11,9 +11,6 @@ data:
   edc.iam.did.web.use.https: "false"
   edc.iam.credential.revocation.mimetype: "application/json"
 
-  # Important:
-  # Do NOT add /2025-1 here.
-  # EDC adds the DSP protocol version itself.
   edc.dsp.callback.address: "http://controlplane.consumer.svc.cluster.local:8082/api/dsp/physical-consumer"
 
   # ── HTTP endpoints ────────────────────────────────────────────────────────

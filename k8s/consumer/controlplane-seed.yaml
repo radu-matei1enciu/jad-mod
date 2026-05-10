@@ -1,5 +1,5 @@
 # Registers the physical consumer ParticipantContext, sets the participant-scoped
-# runtime config required for JAD/DCP, registers the consumer dataplane instance,
+# runtime config required for JAD/DCP
 # and registers the CEL expression used to evaluate CatenaMembershipCredential policies.
 
 ---
@@ -32,7 +32,7 @@ spec:
                 echo "Waiting for consumer controlplane..."
                 sleep 5
               done
-              echo "Controlplane ready!"
+              echo "Controlplane ready"
 
       containers:
         - name: seed-controlplane
@@ -93,11 +93,11 @@ spec:
                 | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
 
               if [ -z "${ADMIN_TOKEN}" ]; then
-                echo "✗ Failed to get admin management API token"
+                echo " Failed to get admin management API token"
                 exit 1
               fi
 
-              echo "✓ Admin management API token received"
+              echo " Admin management API token received"
 
               PROVISIONER_TOKEN=$(curl -sf -X POST \
                 "${KC_HOST}/realms/${KC_REALM}/protocol/openid-connect/token" \
@@ -109,11 +109,11 @@ spec:
                 | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
 
               if [ -z "${PROVISIONER_TOKEN}" ]; then
-                echo "✗ Failed to get provisioner management API token"
+                echo " Failed to get provisioner management API token"
                 exit 1
               fi
 
-              echo "✓ Provisioner management API token received"
+              echo " Provisioner management API token received"
 
               echo ""
               echo "================================================"
@@ -136,14 +136,14 @@ spec:
               PARTICIPANT_BODY=$(echo "${PARTICIPANT_RESPONSE}" | sed '$d')
 
               if [ "${PARTICIPANT_HTTP_STATUS}" -eq 409 ]; then
-                echo "⚠ ParticipantContext already exists, continuing"
+                echo " ParticipantContext already exists, continuing"
               elif [ "${PARTICIPANT_HTTP_STATUS}" -lt 200 ] || [ "${PARTICIPANT_HTTP_STATUS}" -ge 300 ]; then
-                echo "✗ Could not register ParticipantContext"
+                echo " Could not register ParticipantContext"
                 echo "HTTP status: ${PARTICIPANT_HTTP_STATUS}"
                 echo "Body: ${PARTICIPANT_BODY}"
                 exit 1
               else
-                echo "✓ ParticipantContext registered"
+                echo " ParticipantContext registered"
               fi
 
               echo ""
@@ -184,12 +184,12 @@ spec:
               CONFIG_BODY=$(echo "${CONFIG_RESPONSE}" | sed '$d')
 
               if [ "${CONFIG_HTTP_STATUS}" -lt 200 ] || [ "${CONFIG_HTTP_STATUS}" -ge 300 ]; then
-                echo "✗ Could not set ParticipantContextConfig"
+                echo " Could not set ParticipantContextConfig"
                 echo "HTTP status: ${CONFIG_HTTP_STATUS}"
                 echo "Body: ${CONFIG_BODY}"
                 exit 1
               else
-                echo "✓ ParticipantContextConfig set"
+                echo " ParticipantContextConfig set"
               fi
 
 
@@ -209,13 +209,13 @@ spec:
                 BODY=$(echo "${RESPONSE}" | sed '$d')
 
                 if [ "${HTTP_STATUS}" -eq 409 ]; then
-                  echo "⚠ CEL expression already exists, skipping"
+                  echo " CEL expression already exists, skipping"
                 elif [ "${HTTP_STATUS}" -lt 200 ] || [ "${HTTP_STATUS}" -ge 300 ]; then
-                  echo "✗ Unexpected HTTP status while creating CEL: ${HTTP_STATUS}"
+                  echo " Unexpected HTTP status while creating CEL: ${HTTP_STATUS}"
                   echo "Body: ${BODY}"
                   exit 1
                 else
-                  echo "✓ CEL expression created/registered"
+                  echo " CEL expression created/registered"
                 fi
               }
 

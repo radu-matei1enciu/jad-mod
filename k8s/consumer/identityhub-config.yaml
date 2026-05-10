@@ -34,9 +34,7 @@ data:
   edc.datasource.default.password: "ih"
   edc.sql.schema.autocreate: "true"
 
-  # Prevents STS token replay attacks
   edc.iam.accesstoken.jti.validation: "true"
-  # 1-day grace period before credential expiry triggers renewal
   edc.iam.credential.renewal.graceperiod: "86400"
 
   # JAD's shared Keycloak, edcv realm
