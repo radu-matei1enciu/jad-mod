@@ -11,6 +11,7 @@ kubectl port-forward -n consumer deployment/controlplane 9081:8081
 kubectl port-forward -n edc-v deployment/controlplane 18081:8081
 kubectl port-forward -n edc-v deployment/keycloak 8180:8080
 kubectl port-forward -n edc-v svc/dataplane 11002:11002
+kubectl port-forward -n consumer deployment/identityhub 7081:7081
 ```
 
 ## Environment
