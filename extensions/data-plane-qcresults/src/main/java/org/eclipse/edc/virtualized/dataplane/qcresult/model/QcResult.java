@@ -12,14 +12,15 @@
  *
  */
 
-package org.eclipse.edc.virtualized.dataplane.cert.model;
+package org.eclipse.edc.virtualized.dataplane.qcresult.model;
 
-import java.util.List;
-import java.util.Map;
-
-public record CertMetadata(String id, String contentType, Map<String, Object> properties, List<ActivityItem> history) {
-
-    public CertMetadata(String id, String contentType, Map<String, Object> properties) {
-        this(id, contentType, properties, List.of());
-    }
-}
+public record QcResult(
+        String id,
+        String batchId,
+        String product,
+        String test,
+        String result,
+        String specification,
+        String status,
+        String approvedAt
+) {}

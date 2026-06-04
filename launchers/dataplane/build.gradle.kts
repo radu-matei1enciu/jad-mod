@@ -20,7 +20,7 @@ plugins {
 
 dependencies {
     runtimeOnly(libs.tink)
-    runtimeOnly(project(":extensions:data-plane-certs"))
+    runtimeOnly(project(":extensions:data-plane-qcresults"))
 
     runtimeOnly(libs.edc.vault.hashicorp)
     runtimeOnly(libs.edc.monitor.console)

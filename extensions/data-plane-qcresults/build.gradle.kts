@@ -27,7 +27,6 @@ dependencies {
     implementation(libs.edc.core.connector)
     implementation(libs.edc.core.api)
     implementation(libs.edc.core.participantcontext.config)
-    implementation(libs.jersey.multipart)
     implementation(libs.edc.lib.util)
     implementation(libs.edc.lib.sql)
     implementation(libs.edc.lib.token)

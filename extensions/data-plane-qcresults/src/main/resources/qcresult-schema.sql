@@ -13,10 +13,13 @@
 
 -- THIS SCHEMA HAS BEEN WRITTEN AND TESTED ONLY FOR POSTGRES
 
--- table: edc_certs
-CREATE TABLE IF NOT EXISTS edc_certs
-(
-    id                VARCHAR PRIMARY KEY,
-    metadata          JSONB default '{}',
-    data              BYTEA
+CREATE TABLE IF NOT EXISTS qc_result (
+    id               VARCHAR PRIMARY KEY,
+    batch_id         VARCHAR NOT NULL,
+    product          VARCHAR NOT NULL,
+    test             VARCHAR NOT NULL,
+    result           VARCHAR NOT NULL,
+    specification    VARCHAR NOT NULL,
+    status           VARCHAR NOT NULL,
+    approved_at      VARCHAR NOT NULL
 );

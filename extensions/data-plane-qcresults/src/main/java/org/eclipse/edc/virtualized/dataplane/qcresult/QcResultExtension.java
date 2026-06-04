@@ -1,18 +1,4 @@
-/*
- *  Copyright (c) 2025 Metaform Systems, Inc.
- *
- *  This program and the accompanying materials are made available under the
- *  terms of the Apache License, Version 2.0 which is available at
- *  https://www.apache.org/licenses/LICENSE-2.0
- *
- *  SPDX-License-Identifier: Apache-2.0
- *
- *  Contributors:
- *       Metaform Systems, Inc. - initial API and implementation
- *
- */
-
-package org.eclipse.edc.virtualized.dataplane.cert;
+package org.eclipse.edc.virtualized.dataplane.qcresult;
 
 import org.eclipse.edc.api.authentication.JwksResolver;
 import org.eclipse.edc.api.authentication.filter.JwtValidatorFilter;
@@ -32,9 +18,9 @@ import org.eclipse.edc.token.rules.NotBeforeValidationRule;
 import org.eclipse.edc.token.spi.TokenValidationRule;
 import org.eclipse.edc.token.spi.TokenValidationService;
 import org.eclipse.edc.transaction.spi.TransactionContext;
-import org.eclipse.edc.virtualized.dataplane.cert.api.CertExchangePublicController;
-import org.eclipse.edc.virtualized.dataplane.cert.api.CertInternalExchangeController;
-import org.eclipse.edc.virtualized.dataplane.cert.store.CertStore;
+import org.eclipse.edc.virtualized.dataplane.qcresult.api.QcResultInternalController;
+import org.eclipse.edc.virtualized.dataplane.qcresult.api.QcResultPublicController;
+import org.eclipse.edc.virtualized.dataplane.qcresult.store.QcResultStore;
 import org.eclipse.edc.web.spi.WebService;
 import org.eclipse.edc.web.spi.configuration.PortMapping;
 import org.eclipse.edc.web.spi.configuration.PortMappingRegistry;
@@ -44,18 +30,18 @@ import java.net.URL;
 import java.time.Clock;
 import java.util.List;
 
-import static org.eclipse.edc.virtualized.dataplane.cert.CertExchangeExtension.NAME;
+import static org.eclipse.edc.virtualized.dataplane.qcresult.QcResultExtension.NAME;
 
 @Extension(NAME)
-public class CertExchangeExtension implements ServiceExtension {
-    public static final String NAME = "Cert Exchange Extension";
-    public static final String API_CONTEXT = "certs";
-    private static final int DEFAULT_CERTS_PORT = 8186;
-    private static final String DEFAULT_CERTS_PATH = "/api/data";
+public class QcResultExtension implements ServiceExtension {
+    public static final String NAME = "QC Result Extension";
+    public static final String API_CONTEXT = "qcresults";
+    private static final int DEFAULT_PORT = 8186;
+    private static final String DEFAULT_PATH = "/api/qc";
     private static final long FIVE_MINUTES = 1000 * 60 * 5;
 
     @Configuration
-    private CertApiConfiguration apiConfiguration;
+    private QcApiConfiguration apiConfiguration;
 
     @Inject
     private Hostname hostname;
@@ -67,7 +53,7 @@ public class CertExchangeExtension implements ServiceExtension {
     private WebService webService;
 
     @Inject
-    private CertStore certStore;
+    private QcResultStore qcResultStore;
 
     @Inject
     private TransactionContext transactionContext;
@@ -96,11 +82,10 @@ public class CertExchangeExtension implements ServiceExtension {
             throw new EdcException(e);
         }
 
-        webService.registerResource(API_CONTEXT, new CertExchangePublicController(certStore, transactionContext));
+        webService.registerResource(API_CONTEXT, new QcResultPublicController(qcResultStore, transactionContext));
         webService.registerResource(API_CONTEXT, new JwtValidatorFilter(tokenValidationService, new JwksResolver(url, keyParserRegistry, sigletConfig.cacheValidityInMillis), getRules()));
 
-        webService.registerResource("control", new CertInternalExchangeController(certStore, transactionContext));
-
+        webService.registerResource("control", new QcResultInternalController(qcResultStore, transactionContext));
     }
 
     private List<TokenValidationRule> getRules() {
@@ -111,16 +96,13 @@ public class CertExchangeExtension implements ServiceExtension {
         );
     }
 
-
     @Settings
-    record CertApiConfiguration(
-            @Setting(key = "web.http." + API_CONTEXT + ".port", description = "Port for " + API_CONTEXT + " api context", defaultValue = DEFAULT_CERTS_PORT + "")
+    record QcApiConfiguration(
+            @Setting(key = "web.http." + API_CONTEXT + ".port", description = "Port for " + API_CONTEXT + " api context", defaultValue = DEFAULT_PORT + "")
             int port,
-            @Setting(key = "web.http." + API_CONTEXT + ".path", description = "Path for " + API_CONTEXT + " api context", defaultValue = DEFAULT_CERTS_PATH)
+            @Setting(key = "web.http." + API_CONTEXT + ".path", description = "Path for " + API_CONTEXT + " api context", defaultValue = DEFAULT_PATH)
             String path
-    ) {
-
-    }
+    ) {}
 
     @Settings
     record SigletConfig(
@@ -130,7 +112,5 @@ public class CertExchangeExtension implements ServiceExtension {
             String jwksUrl,
             @Setting(key = "edc.iam.siglet.jwks.cache.validity", description = "Time (in ms) that cached JWKS are cached", defaultValue = "" + FIVE_MINUTES)
             long cacheValidityInMillis
-    ) {
-
-    }
+    ) {}
 }
