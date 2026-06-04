@@ -1,6 +1,6 @@
 package org.eclipse.edc.virtualized.dataplane.qcresult;
 
-import org.eclipse.edc.api.authentication.JwksResolver;
+import org.eclipse.edc.keys.resolver.JwksPublicKeyResolver;
 import org.eclipse.edc.api.authentication.filter.JwtValidatorFilter;
 import org.eclipse.edc.keys.spi.KeyParserRegistry;
 import org.eclipse.edc.runtime.metamodel.annotation.Configuration;
@@ -8,7 +8,6 @@ import org.eclipse.edc.runtime.metamodel.annotation.Extension;
 import org.eclipse.edc.runtime.metamodel.annotation.Inject;
 import org.eclipse.edc.runtime.metamodel.annotation.Setting;
 import org.eclipse.edc.runtime.metamodel.annotation.Settings;
-import org.eclipse.edc.spi.EdcException;
 import org.eclipse.edc.spi.system.Hostname;
 import org.eclipse.edc.spi.system.ServiceExtension;
 import org.eclipse.edc.spi.system.ServiceExtensionContext;
@@ -21,12 +20,14 @@ import org.eclipse.edc.transaction.spi.TransactionContext;
 import org.eclipse.edc.virtualized.dataplane.qcresult.api.QcResultInternalController;
 import org.eclipse.edc.virtualized.dataplane.qcresult.api.QcResultPublicController;
 import org.eclipse.edc.virtualized.dataplane.qcresult.store.QcResultStore;
+import org.eclipse.edc.virtualized.dataplane.qcresult.scheduler.QcResultFetcher;
 import org.eclipse.edc.web.spi.WebService;
 import org.eclipse.edc.web.spi.configuration.PortMapping;
 import org.eclipse.edc.web.spi.configuration.PortMappingRegistry;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.time.Clock;
 import java.util.List;
 
@@ -70,22 +71,31 @@ public class QcResultExtension implements ServiceExtension {
     @Inject
     private Clock clock;
 
+    @Inject
+    private QcResultFetcher fetcher;
+
+    private ScheduledExecutorService scheduler;
+    private ServiceExtensionContext context;
+
     @Override
     public void initialize(ServiceExtensionContext context) {
+        this.context = context;
         var portMapping = new PortMapping(API_CONTEXT, apiConfiguration.port(), apiConfiguration.path());
         portMappingRegistry.register(portMapping);
 
-        URL url;
-        try {
-            url = new URL(sigletConfig.jwksUrl());
-        } catch (MalformedURLException e) {
-            throw new EdcException(e);
-        }
-
         webService.registerResource(API_CONTEXT, new QcResultPublicController(qcResultStore, transactionContext));
-        webService.registerResource(API_CONTEXT, new JwtValidatorFilter(tokenValidationService, new JwksResolver(url, keyParserRegistry, sigletConfig.cacheValidityInMillis), getRules()));
+        var resolver = JwksPublicKeyResolver.create(keyParserRegistry, sigletConfig.jwksUrl(), context.getMonitor(), sigletConfig.cacheValidityInMillis());
+        webService.registerResource(API_CONTEXT, new JwtValidatorFilter(tokenValidationService, resolver, getRules()));
 
         webService.registerResource("control", new QcResultInternalController(qcResultStore, transactionContext));
+
+        scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler.scheduleAtFixedRate(
+                this::fetchAndStoreQcResults,
+                0,
+                10,
+                TimeUnit.SECONDS
+        );
     }
 
     private List<TokenValidationRule> getRules() {
@@ -113,4 +123,20 @@ public class QcResultExtension implements ServiceExtension {
             @Setting(key = "edc.iam.siglet.jwks.cache.validity", description = "Time (in ms) that cached JWKS are cached", defaultValue = "" + FIVE_MINUTES)
             long cacheValidityInMillis
     ) {}
+
+    private void fetchAndStoreQcResults() {
+        try {
+            var results = fetcher.fetch();
+            transactionContext.execute(() -> results.forEach(qcResultStore::store));
+        } catch (Exception e) {
+            context.getMonitor().warning("QC fetch failed: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void shutdown() {
+        if (scheduler != null) {
+            scheduler.shutdown();
+        }
+    }
 }

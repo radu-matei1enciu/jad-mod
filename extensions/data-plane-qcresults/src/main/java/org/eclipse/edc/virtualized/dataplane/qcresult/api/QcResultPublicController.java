@@ -10,6 +10,7 @@ import org.eclipse.edc.transaction.spi.TransactionContext;
 
 import java.util.List;
 
+import org.eclipse.edc.virtualized.dataplane.qcresult.model.QcResult;
 import org.eclipse.edc.virtualized.dataplane.qcresult.store.QcResultStore;
 
 import static jakarta.ws.rs.core.Response.Status.FORBIDDEN;

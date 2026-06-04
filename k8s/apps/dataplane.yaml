@@ -34,7 +34,7 @@ spec:
     spec:
       containers:
         - name: dataplane
-          image: ghcr.io/metaform/jad/dataplane@sha256:44e2c1d12127d6ef8bf06909e189bbc8e854cc2a485cfed94fb80d8e89ac14b1
+          image: ghcr.io/radu-matei1enciu/dataplane:qcresults
           imagePullPolicy: Always
           envFrom:
             - configMapRef:

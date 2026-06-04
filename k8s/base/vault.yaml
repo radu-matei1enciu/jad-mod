@@ -69,7 +69,7 @@ spec:
       serviceAccountName: vault-auth
       containers:
         - name: vault-cli
-          image: hashicorp/vault:latest
+          image: hashicorp/vault@sha256:e40c741ed95bb271425e3e6ca6c222d620cf8682f6f7a1b1e7c9d49d0aba484b
           env:
             - name: VAULT_ADDR
               value: "http://vault.edc-v.svc.cluster.local:8200"
