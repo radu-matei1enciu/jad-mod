@@ -41,6 +41,7 @@ dependencies {
     implementation(libs.edc.api.observability)
     implementation(libs.jakarta.rsApi)
     implementation(libs.postgres)
+    implementation("jakarta.annotation:jakarta.annotation-api:2.1.1")
 
     testImplementation(libs.edc.lib.http)
     testImplementation(libs.edc.junit)

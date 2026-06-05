@@ -17,6 +17,7 @@ import org.eclipse.edc.token.rules.NotBeforeValidationRule;
 import org.eclipse.edc.token.spi.TokenValidationRule;
 import org.eclipse.edc.token.spi.TokenValidationService;
 import org.eclipse.edc.transaction.spi.TransactionContext;
+import org.eclipse.edc.virtualized.dataplane.qcresult.api.CorsFilter;
 import org.eclipse.edc.virtualized.dataplane.qcresult.api.QcResultInternalController;
 import org.eclipse.edc.virtualized.dataplane.qcresult.api.QcResultPublicController;
 import org.eclipse.edc.virtualized.dataplane.qcresult.store.QcResultStore;
@@ -84,6 +85,7 @@ public class QcResultExtension implements ServiceExtension {
         portMappingRegistry.register(portMapping);
 
         webService.registerResource(API_CONTEXT, new QcResultPublicController(qcResultStore, transactionContext));
+        webService.registerResource(API_CONTEXT, new CorsFilter());
         var resolver = JwksPublicKeyResolver.create(keyParserRegistry, sigletConfig.jwksUrl(), context.getMonitor(), sigletConfig.cacheValidityInMillis());
         webService.registerResource(API_CONTEXT, new JwtValidatorFilter(tokenValidationService, resolver, getRules()));
 
