@@ -40,7 +40,7 @@ spec:
       containers:
         - name: jad-web-ui
           image:
-            ghcr.io/radu-matei1enciu/edc-public-participant-portal-mod:latest
+            ghcr.io/radu-matei1enciu/edc-public-participant-portal-mod:ucb-demo
           ports:
             - containerPort: 80
               protocol: TCP
