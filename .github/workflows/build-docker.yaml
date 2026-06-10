@@ -23,9 +23,12 @@ on:
     branches: [ main ]
 
 jobs:
-  build-and-push-runtimes:
+
+  build-and-push-runtime-images:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
     strategy:
       matrix:
         include:

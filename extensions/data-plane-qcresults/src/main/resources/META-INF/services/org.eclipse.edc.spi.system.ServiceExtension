@@ -1,3 +1,0 @@
-org.eclipse.edc.virtualized.dataplane.qcresult.QcResultExtension
-org.eclipse.edc.virtualized.dataplane.qcresult.QcResultSqlExtension
-org.eclipse.edc.virtualized.dataplane.qcresult.QcResultSchedulerExtension

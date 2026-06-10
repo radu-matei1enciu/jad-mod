@@ -83,12 +83,6 @@ data:
     \c issuerservice
     GRANT ALL ON SCHEMA public TO issuer;
     
-    CREATE DATABASE dataplane;
-    CREATE USER dp WITH PASSWORD 'dp';
-    GRANT ALL PRIVILEGES ON DATABASE dataplane TO dp;
-    \c dataplane
-    GRANT ALL ON SCHEMA public TO dp;
-    
     CREATE DATABASE keycloak;
     CREATE USER kc WITH PASSWORD 'kc';
     GRANT ALL PRIVILEGES ON DATABASE keycloak TO kc;

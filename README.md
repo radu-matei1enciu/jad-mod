@@ -63,7 +63,7 @@ helm upgrade --install --namespace traefik traefik traefik/traefik --create-name
 Then, install the custom resource definitions (CRDs) for the Gateway API:
 
 ```shell
-kubectl apply --server-side --force-conflicts -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/experimental-install.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml
 ```
 
 #### Enable network access to services
@@ -88,6 +88,10 @@ To set up port-forwarding, run the following command:
 
 ```shell
 kubectl -n traefik port-forward svc/traefik 80
+```
+or
+```shell
+sudo kubectl --kubeconfig=/home/radu/.kube/config -n traefik port-forward svc/traefik 80
 ```
 
 This forwards port 80 from the host to the Traefik service inside the cluster. You may need to run this with `sudo`
@@ -131,7 +135,7 @@ traefik   LoadBalancer   10.96.251.221   172.18.0.3    80:31415/TCP,443:31650/TC
 
 #### 2.1 Option 1: Use pre-built images
 
-There are pre-built images for all JAD apps available from [GHCR](https://github.com/Metaform/jad/packages) and the
+There are pre-built images for all JAD apps available from [GHCR](https://github.com/eclipse-dataspace-hub/jad/packages) and the
 Connector Fabric Manager images are available from
 the [CFM GitHub Repository](https://github.com/eclipse-cfm/cfm/packages). Those are tested and we
 strongly recommend using them.
@@ -155,16 +159,16 @@ and now want to see it in action, please follow the following steps to build and
 
   ```shell
   kind load docker-image \
-      ghcr.io/metaform/jad/controlplane:latest \
-      ghcr.io/metaform/jad/identity-hub:latest \
-      ghcr.io/metaform/jad/issuerservice:latest \
-      ghcr.io/metaform/jad/dataplane:latest -n edcv
+      ghcr.io/eclipse-dataspace-hub/jad/controlplane:latest \
+      ghcr.io/eclipse-dataspace-hub/jad/identity-hub:latest \
+      ghcr.io/eclipse-dataspace-hub/jad/issuerservice:latest \
+      ghcr.io/eclipse-dataspace-hub/jad/dataplane:latest -n edcv
   ```
 
   or if you're a bash God:
 
   ```shell
-  kind load docker-image -n edcv $(docker images --format "{{.Repository}}:{{.Tag}}" | grep '^ghcr.io/metaform/jad.*:latest')
+  kind load docker-image -n edcv $(docker images --format "{{.Repository}}:{{.Tag}}" | grep '^ghcr.io/eclipse-dataspace-hub/jad.*:latest')
   ```
 
 - build CFM docker images locally:
@@ -204,6 +208,17 @@ and now want to see it in action, please follow the following steps to build and
   ```
 
   For this, both the EDC-V and CFM docker images must be built locally!!
+
+#### 2.3 Build and deploy clearglass
+
+Clearglass is a small Rust application that acts as a reverse proxy for the JAD services and is described in more
+detail in a [later chapter](#jads-apis--a-single-pane-of-glass). It is being deployed as part of the base (or
+infrastructure)
+layer.
+
+For now, we have to build and load it manually using the following commands:
+
+Clearglass is available in the CFM project: https://github.com/eclipse-cfm/clearglass.
 
 ### 3. Deploy the services
 
@@ -399,13 +414,136 @@ For example, if a participant onboarding went only through half-way, we recommen
 
 In some cases, even deleting and re-creating the KinD cluster may be required.
 
-## Deploying JAD on a bare-metal/cloud-hosted Kubernetes
+## JAD's APIs: GlassAPI - A single pane of glass
+
+All JAD services are exposed through a single Traefik gateway (`edcv-gateway`) on `jad.localhost`, acting as a single
+pane of glass. Each service is reachable via a path prefix rewritten before forwarding to the backend.
+
+This single pane of glass is called the `GlassAPI`. and is protected by an auth backend called `clearglass`, details
+are [here](#clearglass).
+
+Authentication is enforced at the gateway level using Traefik `ForwardAuth` middlewares. Each middleware forwards the
+`Authorization` header to the `clearglass` service, which validates the Bearer token against Keycloak via RFC 7662
+token introspection and checks for the required OAuth2 scopes. Services without a `middleware` entry listed are
+unauthenticated at the gateway level.
+
+### Application routes (`jad.localhost`)
+
+| Service             | Exposed path        | Rewrites to             | Backend port | Auth middleware                        |
+|---------------------|---------------------|-------------------------|--------------|----------------------------------------|
+| Control Plane       | `/api/management`   | `/api/mgmt`             | `8081`       | `jwt-auth-management-api`              |
+| Identity Hub        | `/api/identity`     | `/api/identity/v1alpha` | `7081`       | `jwt-auth-identity-api`                |
+| Issuer Service      | `/api/issuer/admin` | `/api/admin/v1alpha`    | `10013`      | `jwt-auth-issuer-admin-api`            |
+| Provision Manager   | `/api/pm`           | `/api/v1alpha`          | `8080`       | `jwt-auth-provision-manager-api`       |
+| Tenant Manager      | `/api/tm`           | `/api/v1alpha1`         | `8080`       | `jwt-auth-tenant-manager-api`          |
+| Dataplane (public)  | `/api/dp/public`    | `/`                     | `11002`      | —                                      |
+| Dataplane (control) | `/api/dp/control`   | `/`                     | `8083`       | —                                      |
+| Dataplane (certs)   | `/api/dp/certs`     | `/`                     | `8186`       | —                                      |
+| Siglet              | `/api/siglet`       | `/`                     | `8080`       | —                                      |
+| Redline             | `/redline`          | `/`                     | `8081`       | —                                      |
+| Keycloak            | `/auth`             | `/`                     | `8080`       | — (is the auth server)                 |
+| Web UI              | `/ui`               | `/`                     | `80`         | — (obtains its own token via Keycloak) |
+
+### Auth middleware scopes
+
+Each `jwt-auth-*` middleware enforces a specific pair of OAuth2 scopes (`read` and `write`):
+
+| Middleware                       | Required scopes                                             |
+|----------------------------------|-------------------------------------------------------------|
+| `jwt-auth-management-api`        | `management-api:read`, `management-api:write`               |
+| `jwt-auth-identity-api`          | `identity-api:read`, `identity-api:write`                   |
+| `jwt-auth-issuer-admin-api`      | `issuer-admin-api:read`, `issuer-admin-api:write`           |
+| `jwt-auth-provision-manager-api` | `provision-manager-api:read`, `provision-manager-api:write` |
+| `jwt-auth-tenant-manager-api`    | `tenant-manager-api:read`, `tenant-manager-api:write`       |
+
+### Infrastructure routes (each on their own hostname)
+
+Infrastructure services are not protected by the auth middleware and are only intended for local development access.
+
+| Service    | Hostname               | Remark                                                         |
+|------------|------------------------|----------------------------------------------------------------|
+| Grafana    | `grafana.localhost`    |                                                                |
+| Prometheus | `prometheus.localhost` |                                                                |
+| Jaeger     | `jaeger.localhost`     |                                                                |
+| Loki       | `loki.localhost`       |                                                                |
+| Vault      | `vault.localhost`      | access from outside the cluster is only intended for e2e tests |
+
+### Clearglass
+
+`clearglass` is a small sidecar service (`ghcr.io/eclipse-cfm/clearglass`) that acts as the authentication and
+authorization enforcement point for all protected APIs. Traefik's `ForwardAuth` mechanism intercepts every inbound
+request and calls `clearglass`'s `/validate` endpoint before forwarding it to the backend.
+
+The proxy performs two checks:
+
+1. **Token validation** — it calls Keycloak's RFC 7662 token introspection endpoint
+   (`/realms/edcv/protocol/openid-connect/token/introspect`) using its own client credentials (`clearglass` /
+   `clearglass-secret`) to verify that the Bearer token in the `Authorization` header is active.
+2. **Scope check** — the required OAuth2 scopes are passed as `?scope=` query parameters by each Traefik middleware.
+   The proxy checks that the token carries at least those scopes. If either check fails, the request is rejected with
+   `401 Unauthorized` before it ever reaches the backend service.
+
+This design keeps authentication logic out of the individual services and centralizes it in one place, making it easy
+to add or modify access rules by updating the middleware definitions in
+[`k8s/base/jwt-middleware.yaml`](k8s/base/jwt-middleware.yaml).
+
+## Advanced topics
+
+### Rotate a participant's key material
+
+Keys should be rotated periodically to reduce the chance of all sorts of nasty attacks such as Lattice attacks or
+side-channel attacks. In practical applications, this would be done by a management application that uses the Glass
+API, like an admin dashboard, that periodically invokes these APIs here to perform the action.
+
+Participant keys are managed by IdentityHub and stored in a secure vault.
+
+Rotating keys is not a single operation; rather, several individual steps are performed in IdentityHub, such as deleting
+the old private key, updating the DID document, etc. However, all of this is abstracted by a single API call.
+
+#### Requests
+
+The general sequence of operations necessary to collect the required information is as follows.
+
+If the `participantContextId` is not known, perform these steps to obtain it:
+
+- query the participant profile using the TenantManager API
+- record participant `participantProfileId`, its `tenantId` and the `participantContextId`. The latter is how we
+  establish a correlation between CFM and dataspace components such as IdentityHub and ControlPlane.
+
+After that, use the `participantContextId` to perform the following steps:
+
+- get the client secret from Vault. We need this to authenticate REST calls against IdentityHub
+- query all available KeyPairs owned by the `participantContextId`, select the (first) active one (`state=200`) and
+  record the ID of the key pair.
+- call IdentityHub's `/keypairs/rotate` endpoint with the information provided. In that call, please provide in the body
+  a `keyId` and a `privateKeyAlias`. The `keyId` should be the participant's identifier (web:DID) plus the `"#"` sign,
+  followed by a random string:
+  ```json
+  {
+    "keyGeneratorParams": {
+      "algorithm": "eddsa",
+      "curve": "ed25519"    
+     },
+    "keyId": "{{participantIdentifier}}#{{$randomUUID}}",
+    "privateKeyAlias": "{{$randomUUID}}" 
+  }
+  ```
+- verify the correct execution of the rotation, either by checking the participant context's DID document and see if the
+  new key is there, or call the Query-Keypair API again
+
+Programmatically, this sequence is demonstrated in an E2E test in
+[KeyRotationEndToEndTest.java](./tests/end2end/src/test/java/org/eclipse/edc/jad/tests/KeyRotationEndToEndTest.java).
+
+The REST calls are demonstrated in the "Rotate Participant Key" folder in
+the [Bruno collection](./requests/EDC-V%20Onboarding/Rotate%20Participant%20Key).
+
+### Deploying JAD on a bare-metal/cloud-hosted Kubernetes
 
 KinD is geared towards local development and testing. For example, it comes with a bunch of useful defaults, such as
 storage classes, load balancers, network plugins, etc. If you want to deploy JAD on a bare-metal or cloud-hosted
 Kubernetes cluster, then there are some caveats to keep in mind.
 
-### Configure network access and DNS
+#### Configure network access and DNS
 
 EDC-V, Keycloak and Vault will need to be accessible from outside the cluster. For this, your cluster needs a network
 plugin and an external load balancer. For bare-metal installations, consider using [MetalLB](https://metallb.io).
@@ -431,7 +569,7 @@ Where `194.178.218.88` is the IP address of the Kubernetes host running MetalLB 
 _In actual production deployments, these individual hostnames, and potentially also individual IP addresses, would be
 necessary to isolate security domains and prevent unauthorized access or privilege escalation._
 
-### Tune Traefik gateway controller
+#### Tune Traefik gateway controller
 
 By default, Traefik binds to port 80 and 443 on the host machine. This is useful to enable clean URLs like
 `http://tm.yourdomain.com/api/v1alpha1/cells` etc. without any ports. However, some Linux distributions don't allow
@@ -451,7 +589,7 @@ securityContext:
   runAsUser: 0
 ```
 
-### Create Bruno Environment
+#### Create Bruno Environment
 
 Some of the URL paths used in Bruno are hard coded to `localhost` in a Bruno environment named `KinD Local`. This is
 tailored to running JAD on a local KinD cluster. To make the collection usable for a remote deployment, we recommend
@@ -461,7 +599,7 @@ Create another environment to suit your setup:
 
 ![img.png](docs/images/bruno_custom_env.png)
 
-### Update deployment manifests
+#### Update deployment manifests
 
 in [keycloak.yaml](k8s/base/keycloak.yaml) and [vault.yaml](k8s/base/vault.yaml), update the `hostnames` fields in the
 `HTTPRoute` resources to match your DNS:
@@ -480,7 +618,7 @@ spec:
 Do this for all `HTTPRoute` declarations in all components' manifests. The `hostnames` field should contain entries
 matching your DNS subdomains that you have also used to create the new Bruno environment.
 
-### Update the Keycloak realm
+#### Update the Keycloak realm
 
 In `k8s/base/keycloak.yaml`, find the line that says:
 
@@ -496,7 +634,7 @@ and replace with
 
 This is crucial for Vault authentication to work properly.
 
-### Tune readiness probes
+#### Tune readiness probes
 
 We've set up the readiness probes fairly tight, to avoid long wait times on local KinD clusters. However, in some
 Kubernetes

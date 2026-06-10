@@ -7,5 +7,9 @@ out/
 
 .idea/
 
-.terraform*
-*terraform.tfstate*
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log

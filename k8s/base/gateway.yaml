@@ -25,7 +25,21 @@ spec:
       port: 80
       allowedRoutes:
         namespaces:
-          from: All  #or Same or Selector
-#        kinds:
-#          - kind: HTTPRoute
-#            group: gateway.networking.k8s.io
+          from: Same  #or Same or Selector
+        kinds:
+          - kind: HTTPRoute
+            group: gateway.networking.k8s.io
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edcv-tls
+            kind: Secret
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds:
+          - kind: HTTPRoute
+            group: gateway.networking.k8s.io

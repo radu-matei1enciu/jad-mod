@@ -33,16 +33,18 @@ spec:
     spec:
       containers:
         - name: vault
-          image: hashicorp/vault@sha256:e40c741ed95bb271425e3e6ca6c222d620cf8682f6f7a1b1e7c9d49d0aba484b
+          image: hashicorp/vault:latest
           ports:
             - containerPort: 8200
+          securityContext:
+            capabilities:
+              add:
+                - IPC_LOCK
           env:
             - name: VAULT_DEV_ROOT_TOKEN_ID
               value: "root"
             - name: VAULT_DEV_LISTEN_ADDRESS
               value: "0.0.0.0:8200"
-            - name: SKIP_SETCAP
-              value: "true"
           args:
             - "server"
             - "-dev"
@@ -69,7 +71,11 @@ spec:
       serviceAccountName: vault-auth
       containers:
         - name: vault-cli
-          image: hashicorp/vault@sha256:e40c741ed95bb271425e3e6ca6c222d620cf8682f6f7a1b1e7c9d49d0aba484b
+          image: hashicorp/vault:latest
+          securityContext:
+            capabilities:
+              add:
+                - IPC_LOCK
           env:
             - name: VAULT_ADDR
               value: "http://vault.edc-v.svc.cluster.local:8200"
@@ -127,15 +133,26 @@ spec:
               }
               EOF
 
+              # Allow participants access to transit keys prefixed with their context ID
+              cat <<EOF | vault policy write participant-transit-policy - || { echo "Failed to write participant transit policy"; exit 1; }
+              path "transit/keys/participant_{{identity.entity.aliases.${ACCESSOR}.name}}*" {
+                  capabilities = ["read", "create", "update", "delete", "list"]
+              }
+
+              path "transit/sign/participant_{{identity.entity.aliases.${ACCESSOR}.name}}*" {
+                  capabilities = ["create", "update"]
+              }
+              EOF
+
               vault write auth/jwt/role/participant -<<EOF || { echo "Failed to create JWT role"; exit 1; }
               {
                 "role_type": "jwt",
                 "user_claim": "participant_context_id",
-                "bound_issuer": "http://vault.localhost/realms/edcv",
+                "bound_issuer": "http://luis-agentic-demo.westeurope.cloudapp.azure.com/auth/realms/edcv",
                 "bound_claims": {
                   "role": "participant"
                 },
-                "token_policies": ["participants-restricted"],
+                "token_policies": ["participants-restricted", "participant-transit-policy"],
                 "clock_skew_leeway": 60
               }
               EOF
@@ -156,7 +173,7 @@ spec:
               {
                 "role_type": "jwt",
                 "user_claim": "azp",
-                "bound_issuer": "http://vault.localhost/realms/edcv",
+                "bound_issuer": "http://luis-agentic-demo.westeurope.cloudapp.azure.com/auth/realms/edcv",
                 "bound_claims": {
                   "role": "provisioner"
                 },

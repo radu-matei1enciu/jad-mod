@@ -47,9 +47,6 @@ allprojects {
     apply(plugin = edcBuildId)
     apply(plugin = "org.eclipse.edc.autodoc")
 
-    repositories {
-	    mavenLocal()
-    }
     // configure which version of the annotation processor to use. defaults to the same version as the plugin
     configure<org.eclipse.edc.plugins.autodoc.AutodocExtension> {
         outputDirectory.set(project.layout.buildDirectory.asFile)
@@ -76,8 +73,8 @@ subprojects {
             val dockerTask: DockerBuildImage = tasks.create("dockerize", DockerBuildImage::class) {
                 val dockerContextDir = project.projectDir
                 dockerFile.set(file("$dockerContextDir/src/main/docker/Dockerfile"))
-                images.add("ghcr.io/metaform/jad/${project.name}:${jadVersion}")
-                images.add("ghcr.io/metaform/jad/${project.name}:latest")
+                images.add("ghcr.io/eclipse-dataspace-hub/jad/${project.name}:${jadVersion}")
+                images.add("ghcr.io/eclipse-dataspace-hub/jad/${project.name}:latest")
 
                 //images.add("${project.name}:latest")
                 // specify platform with the -Dplatform flag:
