@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: edcv-tls
+  namespace: edc-v
+spec:
+  secretName: edcv-tls
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+  dnsNames:
+    - luis-agentic-demo.westeurope.cloudapp.azure.com

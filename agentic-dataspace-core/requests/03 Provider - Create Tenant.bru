@@ -1,0 +1,32 @@
+meta {
+  name: 03 Provider - Create Tenant
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{tmBaseUrl}}/tenants
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "properties": {
+      "name": "Provider Tenant",
+      "location": "eu"
+    },
+    "id":"foobar"
+  }
+}
+
+script:post-response {
+  let body = res.getBody()
+  test("Response contains id", function () {
+      expect(body).to.have.property("id");
+  });
+  
+  if (body && body.id) {
+      bru.setVar("provider_tenant_id", body.id);
+  }
+}

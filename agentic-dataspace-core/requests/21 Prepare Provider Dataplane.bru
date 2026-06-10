@@ -1,0 +1,26 @@
+meta {
+  name: 21 Prepare Provider Dataplane
+  type: http
+  seq: 21
+}
+
+put {
+  url: {{cpBaseUrl}}/v5beta/participants/{{provider_context_id}}/dataplanes
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "id": "consumer-siglet",
+    "transferTypes": [
+      "HttpData-PULL"
+    ],
+    "endpoint": "http://siglet.edc-v.svc.cluster.local:8081/api/v1/{{provider_context_id}}/dataflows"
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

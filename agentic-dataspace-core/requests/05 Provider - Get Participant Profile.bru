@@ -1,0 +1,33 @@
+meta {
+  name: 05 Provider - Get Participant Profile
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{tmBaseUrl}}/tenants/{{provider_tenant_id}}/participant-profiles/{{provider_profile_id}}
+  body: json
+  auth: inherit
+}
+
+vars:pre-request {
+  test_tenant_id: 3fa9401d-6f47-459d-a4ea-3c6d606633c5
+}
+
+script:post-response {
+  let body = res.getBody()
+  
+  test("Should have VPA state", function () {
+    expect(body).to.have.property("properties");
+    expect(body.properties).to.have.property("cfm.vpa.state") 
+    expect(body.properties["cfm.vpa.state"]).to.have.property("participantContextId")
+    expect(body.properties["cfm.vpa.state"]).to.have.property("holderPid")
+    expect(body.properties["cfm.vpa.state"]).to.have.property("credentialRequest")
+  });
+  
+  let props = body.properties
+  if (props && props["cfm.vpa.state"]) {
+    let state = props["cfm.vpa.state"]
+    bru.setVar("provider_context_id", state.participantContextId)
+  }
+}

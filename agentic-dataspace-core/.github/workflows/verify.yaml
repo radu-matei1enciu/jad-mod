@@ -1,0 +1,76 @@
+#
+# Copyright (c) 2025 Metaform Systems, Inc.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Contributors:
+#      Metaform Systems, Inc. - initial API and implementation
+#
+
+
+---
+name: "Verify"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+  workflow_run:
+    workflows: [ "Draft Release" ]
+    types:
+      - completed
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-license-headers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: "Check for files without a license header"
+        run: |-
+          # checks all java, yaml, kts and sql files for an Apache 2.0 license header
+          cmd="grep -riL \"SPDX-License-Identifier: Apache-2.0\" --include=\*.{java,ts,html,css,yaml,yml,kts,sql,tf} --exclude-dir={.gradle,\*\openapi} ."
+          violations=$(eval $cmd | wc -l)
+          if [[ $violations -ne 0 ]] ; then
+            echo "$violations files without license headers were found:";
+            eval $cmd;
+            exit 1;
+          fi
+
+  checkstyle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: eclipse-edc/.github/.github/actions/setup-build@main
+      - name: Run Checkstyle
+        run: ./gradlew checkstyleMain checkstyleTest
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: eclipse-edc/.github/.github/actions/setup-build@main
+      - name: Run Unit tests
+        run: ./gradlew test
+
+  postgresql-Tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: eclipse-edc/.github/.github/actions/setup-build@main
+      - name: Postgresql Tests
+        run: |
+          ./gradlew shadowJar
+          ./gradlew test -DincludeTags="PostgresqlIntegrationTest"

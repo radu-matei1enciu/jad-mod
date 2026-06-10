@@ -1,0 +1,826 @@
+#
+# Copyright (c) 2025 Metaform Systems, Inc.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Contributors:
+#      Metaform Systems, Inc. - initial API and implementation
+#
+
+## This seed job configures the virtual connector control plane for the six Aero-X participants:
+##   Step 1 - obtain Keycloak tokens
+##   Step 2 - CEL expression (Bruno request 13)
+##   Step 3 - asset per participant (Bruno request 17)
+##   Step 4 - policy definition per participant (Bruno request 18)
+##   Step 5 - contract definition per participant (Bruno request 19)
+##   Step 6 - Siglet dataplane registration per participant (Bruno requests 20-21)
+##   Step 7 - pairwise catalog discovery, contract negotiation, and agreement polling (Bruno requests 24-26)
+##   Step 8 - pairwise transfer-process initialization (Bruno request 27)
+##
+## Requests 22-23 are intentionally skipped for now (certificate upload and certificate query).
+## Requests 28-30 are intentionally excluded for now: fetching Siglet transfer tokens and reading certificate data.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: connector-seed
+  namespace: edc-v
+  labels:
+    app: connector-seed
+    platform: edcv
+    type: edcv-job
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: connector-seed
+        platform: edcv
+        type: edcv-job
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        # Wait for the controlplane to be ready.
+        # Port 8080 serves the health/readiness endpoint — no auth required.
+        - name: wait-for-controlplane
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              until curl -sf http://controlplane.edc-v.svc.cluster.local:8080/api/check/readiness; do
+                echo "Waiting for controlplane to be ready..."
+                sleep 5
+              done
+              echo "Controlplane is ready!"
+      containers:
+        - name: seed-connector
+          image: curlimages/curl:latest
+          env:
+            - name: KC_HOST
+              value: "http://keycloak.edc-v.svc.cluster.local:8080"
+            - name: CP_BASE_URL
+              value: "http://controlplane.edc-v.svc.cluster.local:8081/api/mgmt"
+            - name: TM_BASE_URL
+              value: "http://tenant-manager.edc-v.svc.cluster.local:8080"
+            - name: CONTROLPLANE_DSP_BASE_URL
+              value: "http://controlplane.edc-v.svc.cluster.local:8082/api/dsp"
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+
+              # Use an explicit fallback so catalog discovery always receives a full DSP URL.
+              CONTROLPLANE_DSP_BASE_URL="${CONTROLPLANE_DSP_BASE_URL:-http://controlplane.edc-v.svc.cluster.local:8082/api/dsp}"
+              echo "Control Plane DSP base URL: ${CONTROLPLANE_DSP_BASE_URL}"
+
+              # Executes a curl request and stores the response body in RESP_BODY and status code in RESP_STATUS.
+              do_curl() {
+                RESP=$(curl -s -w "\n%{http_code}" "$@")
+                RESP_STATUS=$(printf '%s\n' "$RESP" | tail -1)
+                RESP_BODY=$(printf '%s\n' "$RESP" | sed '$d')
+              }
+
+              echo "================================================"
+              echo "Step 1: Obtain Tokens"
+              echo "================================================"
+
+              echo "POST ${KC_HOST}/realms/edcv/... client_id=admin  scope=management-api:read management-api:write"
+              do_curl -X POST "${KC_HOST}/realms/edcv/protocol/openid-connect/token" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "grant_type=client_credentials" \
+                -d "client_id=admin" \
+                -d "client_secret=edc-v-admin-secret" \
+                --data-urlencode "scope=management-api:read management-api:write"
+              echo "  → HTTP $RESP_STATUS"
+              if [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to get admin token: $RESP_BODY"
+                exit 1
+              fi
+              ADMIN_TOKEN=$(printf '%s\n' "$RESP_BODY" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+              if [ -z "$ADMIN_TOKEN" ]; then
+                echo "ERROR: Failed to parse admin token: $RESP_BODY"
+                exit 1
+              fi
+              echo "✓ Admin token obtained"
+
+              echo "POST ${KC_HOST}/realms/edcv/... client_id=provisioner  scope=tenant-manager-api:write"
+              do_curl -X POST "${KC_HOST}/realms/edcv/protocol/openid-connect/token" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "grant_type=client_credentials" \
+                -d "client_id=provisioner" \
+                -d "client_secret=provisioner-secret" \
+                -d "scope=tenant-manager-api:write"
+              echo "  → HTTP $RESP_STATUS"
+              if [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to get provisioner token: $RESP_BODY"
+                exit 1
+              fi
+              PROVISIONER_TOKEN=$(printf '%s\n' "$RESP_BODY" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+              if [ -z "$PROVISIONER_TOKEN" ]; then
+                echo "ERROR: Failed to parse provisioner token: $RESP_BODY"
+                exit 1
+              fi
+              echo "✓ Provisioner token obtained"
+
+              echo ""
+              echo "================================================"
+              echo "Step 2: Create CEL Expression (global)"
+              echo "================================================"
+              echo "  @id         : membership_expr"
+              echo "  leftOperand : AeroMembershipCredential"
+              echo "  scopes      : catalog, contract.negotiation, transfer.process"
+              echo ""
+              echo "POST $CP_BASE_URL/v5beta/celexpressions"
+
+              do_curl -X POST "$CP_BASE_URL/v5beta/celexpressions" \
+                -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "@context": ["https://w3id.org/edc/connector/management/v2"],
+                  "@type": "CelExpression",
+                  "@id": "membership_expr",
+                  "leftOperand": "AeroMembershipCredential",
+                  "description": "Expression for evaluating membership credential",
+                  "scopes": [
+                    "catalog",
+                    "contract.negotiation",
+                    "transfer.process"
+                  ],
+                  "expression": "ctx.agent.claims.vc.filter(c, c.type.exists(t, t == '"'"'AeroMembershipCredential'"'"')).exists(c, c.credentialSubject.exists(cs, timestamp(cs.membershipStartDate) < now))"
+                }'
+              echo "  → HTTP $RESP_STATUS"
+              echo "  → Body: $RESP_BODY"
+              if [ "$RESP_STATUS" -eq 409 ]; then
+                echo "⚠ CEL expression 'membership_expr' already exists — skipping"
+              elif [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to create CEL expression (HTTP $RESP_STATUS)"
+                exit 1
+              else
+                echo "✓ CEL expression 'membership_expr' created"
+              fi
+
+              echo ""
+              echo "================================================"
+              echo "Step 3: Create Asset per Participant"
+              echo "================================================"
+              echo "  @id        : {participantId}_cert_asset (unique per company)"
+              echo "  permission : membership_asset"
+
+              # Company definitions: participantId drives the TM identifier lookup
+              # and is used as the asset ID prefix to guarantee global uniqueness.
+              # The connector stores assets in a shared table — two participants cannot
+              # share the same @id even via different context URLs.
+              set -- \
+                "airforgeseoem:AirForgeSEOEM" \
+                "eurothrusttier1:EuroThrustTier1" \
+                "wingworkstier1:WingWorksTier1" \
+                "rotortechtier2:RotorTechTier2" \
+                "hydromotiontier2:HydroMotionTier2" \
+                "aeroactuationtier2:AeroActuationTier2"
+
+              COMPANY_INDEX=0
+              for COMPANY in "$@"; do
+                COMPANY_INDEX=$((COMPANY_INDEX + 1))
+                PARTICIPANT_ID="${COMPANY%%:*}"
+                DISPLAY_NAME="${COMPANY#*:}"
+                ASSET_ID="${PARTICIPANT_ID}_cert_asset"
+
+                echo ""
+                echo "────────────────────────────────────────────────"
+                echo "Participant $COMPANY_INDEX/6: $DISPLAY_NAME"
+                echo "  assetId : $ASSET_ID"
+                echo "────────────────────────────────────────────────"
+
+                # Look up participantContextId from TenantManager by DID identifier
+                echo "  Querying TM for participantContextId..."
+                echo "  POST $TM_BASE_URL/api/v1alpha1/participant-profiles/query"
+                echo "    predicate: identifier like '%${PARTICIPANT_ID}%'"
+                do_curl -X POST "$TM_BASE_URL/api/v1alpha1/participant-profiles/query" \
+                  -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"predicate\": \"identifier like '%${PARTICIPANT_ID}%'\"}"
+                echo "    → HTTP $RESP_STATUS"
+                echo "    → Body: $RESP_BODY"
+                if [ "$RESP_STATUS" -ge 400 ]; then
+                  echo "  ERROR: TM query failed for $DISPLAY_NAME (HTTP $RESP_STATUS)"
+                  exit 1
+                fi
+                CONTEXT_ID=$(printf '%s\n' "$RESP_BODY" | grep -o '"participantContextId":"[^"]*"' | head -1 | cut -d'"' -f4) || CONTEXT_ID=""
+                if [ -z "$CONTEXT_ID" ]; then
+                  echo "  ERROR: participantContextId not found in TM response for $DISPLAY_NAME"
+                  exit 1
+                fi
+                echo "  participantContextId: $CONTEXT_ID"
+
+                # Create asset with a company-scoped unique ID
+                echo "  POST $CP_BASE_URL/v5beta/participants/$CONTEXT_ID/assets"
+                do_curl -X POST "$CP_BASE_URL/v5beta/participants/$CONTEXT_ID/assets" \
+                  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d '{
+                    "@context": ["https://w3id.org/edc/connector/management/v2"],
+                    "@type": "Asset",
+                    "@id": "'"$ASSET_ID"'",
+                    "properties": {
+                      "description": "This asset requires the Membership credential to access"
+                    },
+                    "privateProperties": {
+                      "permission": "membership_asset"
+                    }
+                  }'
+                echo "    → HTTP $RESP_STATUS"
+                echo "    → Body: $RESP_BODY"
+                if [ "$RESP_STATUS" -eq 409 ]; then
+                  echo "  ⚠ Asset '$ASSET_ID' already exists for $DISPLAY_NAME — skipping"
+                elif [ "$RESP_STATUS" -ge 400 ]; then
+                  echo "  ERROR: Failed to create asset for $DISPLAY_NAME (HTTP $RESP_STATUS)"
+                  exit 1
+                else
+                  echo "  ✓ Asset '$ASSET_ID' created for $DISPLAY_NAME"
+                fi
+              done
+
+              echo ""
+              echo "================================================"
+              echo "Step 4: Create Policy per Participant"
+              echo "================================================"
+              echo "  @id       : {participantId}_membership_policy (unique per company)"
+              echo "  action    : use"
+              echo "  constraint: AeroMembershipCredential eq active"
+
+              set -- \
+                "airforgeseoem:AirForgeSEOEM" \
+                "eurothrusttier1:EuroThrustTier1" \
+                "wingworkstier1:WingWorksTier1" \
+                "rotortechtier2:RotorTechTier2" \
+                "hydromotiontier2:HydroMotionTier2" \
+                "aeroactuationtier2:AeroActuationTier2"
+
+              COMPANY_INDEX=0
+              for COMPANY in "$@"; do
+                COMPANY_INDEX=$((COMPANY_INDEX + 1))
+                PARTICIPANT_ID="${COMPANY%%:*}"
+                DISPLAY_NAME="${COMPANY#*:}"
+                POLICY_ID="${PARTICIPANT_ID}_membership_policy"
+
+                echo ""
+                echo "────────────────────────────────────────────────"
+                echo "Participant $COMPANY_INDEX/6: $DISPLAY_NAME"
+                echo "  policyId : $POLICY_ID"
+                echo "────────────────────────────────────────────────"
+
+                echo "  Querying TM for participantContextId..."
+                do_curl -X POST "$TM_BASE_URL/api/v1alpha1/participant-profiles/query" \
+                  -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"predicate\": \"identifier like '%${PARTICIPANT_ID}%'\"}"
+                echo "    → HTTP $RESP_STATUS"
+                if [ "$RESP_STATUS" -ge 400 ]; then
+                  echo "  ERROR: TM query failed for $DISPLAY_NAME (HTTP $RESP_STATUS): $RESP_BODY"
+                  exit 1
+                fi
+                CONTEXT_ID=$(printf '%s\n' "$RESP_BODY" | grep -o '"participantContextId":"[^"]*"' | head -1 | cut -d'"' -f4) || CONTEXT_ID=""
+                if [ -z "$CONTEXT_ID" ]; then
+                  echo "  ERROR: participantContextId not found for $DISPLAY_NAME"
+                  exit 1
+                fi
+                echo "  participantContextId: $CONTEXT_ID"
+
+                echo "  POST $CP_BASE_URL/v5beta/participants/$CONTEXT_ID/policydefinitions"
+                do_curl -X POST "$CP_BASE_URL/v5beta/participants/$CONTEXT_ID/policydefinitions" \
+                  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d '{
+                    "@context": ["https://w3id.org/edc/connector/management/v2"],
+                    "@type": "PolicyDefinition",
+                    "@id": "'"$POLICY_ID"'",
+                    "policy": {
+                      "@type": "Set",
+                      "permission": [
+                        {
+                          "action": "use",
+                          "constraint": [
+                            {
+                              "leftOperand": "AeroMembershipCredential",
+                              "operator": "eq",
+                              "rightOperand": "active"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }'
+                echo "    → HTTP $RESP_STATUS"
+                echo "    → Body: $RESP_BODY"
+                if [ "$RESP_STATUS" -eq 409 ]; then
+                  echo "  ⚠ Policy '$POLICY_ID' already exists for $DISPLAY_NAME — skipping"
+                elif [ "$RESP_STATUS" -ge 400 ]; then
+                  echo "  ERROR: Failed to create policy for $DISPLAY_NAME (HTTP $RESP_STATUS)"
+                  exit 1
+                else
+                  echo "  ✓ Policy '$POLICY_ID' created for $DISPLAY_NAME"
+                fi
+              done
+
+              echo ""
+              echo "================================================"
+              echo "Step 5: Create Contract Definition per Participant"
+              echo "================================================"
+              echo "  @id             : {participantId}_membership_contract_def (unique per company)"
+              echo "  accessPolicyId  : {participantId}_membership_policy"
+              echo "  contractPolicyId: {participantId}_membership_policy"
+              echo "  asset selector  : privateProperties.permission = membership_asset"
+
+              set -- \
+                "airforgeseoem:AirForgeSEOEM" \
+                "eurothrusttier1:EuroThrustTier1" \
+                "wingworkstier1:WingWorksTier1" \
+                "rotortechtier2:RotorTechTier2" \
+                "hydromotiontier2:HydroMotionTier2" \
+                "aeroactuationtier2:AeroActuationTier2"
+
+              COMPANY_INDEX=0
+              for COMPANY in "$@"; do
+                COMPANY_INDEX=$((COMPANY_INDEX + 1))
+                PARTICIPANT_ID="${COMPANY%%:*}"
+                DISPLAY_NAME="${COMPANY#*:}"
+                POLICY_ID="${PARTICIPANT_ID}_membership_policy"
+                CONTRACT_DEF_ID="${PARTICIPANT_ID}_membership_contract_def"
+
+                echo ""
+                echo "────────────────────────────────────────────────"
+                echo "Participant $COMPANY_INDEX/6: $DISPLAY_NAME"
+                echo "  contractDefinitionId : $CONTRACT_DEF_ID"
+                echo "────────────────────────────────────────────────"
+
+                echo "  Querying TM for participantContextId..."
+                do_curl -X POST "$TM_BASE_URL/api/v1alpha1/participant-profiles/query" \
+                  -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"predicate\": \"identifier like '%${PARTICIPANT_ID}%'\"}"
+                echo "    → HTTP $RESP_STATUS"
+                if [ "$RESP_STATUS" -ge 400 ]; then
+                  echo "  ERROR: TM query failed for $DISPLAY_NAME (HTTP $RESP_STATUS): $RESP_BODY"
+                  exit 1
+                fi
+                CONTEXT_ID=$(printf '%s\n' "$RESP_BODY" | grep -o '"participantContextId":"[^"]*"' | head -1 | cut -d'"' -f4) || CONTEXT_ID=""
+                if [ -z "$CONTEXT_ID" ]; then
+                  echo "  ERROR: participantContextId not found for $DISPLAY_NAME"
+                  exit 1
+                fi
+                echo "  participantContextId: $CONTEXT_ID"
+
+                echo "  POST $CP_BASE_URL/v5beta/participants/$CONTEXT_ID/contractdefinitions"
+                do_curl -X POST "$CP_BASE_URL/v5beta/participants/$CONTEXT_ID/contractdefinitions" \
+                  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d '{
+                    "@context": ["https://w3id.org/edc/connector/management/v2"],
+                    "@type": "ContractDefinition",
+                    "@id": "'"$CONTRACT_DEF_ID"'",
+                    "accessPolicyId": "'"$POLICY_ID"'",
+                    "contractPolicyId": "'"$POLICY_ID"'",
+                    "assetsSelector": [
+                      {
+                        "@type": "Criterion",
+                        "operandLeft": "privateProperties.'"'"'https://w3id.org/edc/v0.0.1/ns/permission'"'"'",
+                        "operator": "=",
+                        "operandRight": "membership_asset"
+                      }
+                    ]
+                  }'
+                echo "    → HTTP $RESP_STATUS"
+                echo "    → Body: $RESP_BODY"
+                if [ "$RESP_STATUS" -eq 409 ]; then
+                  echo "  ⚠ Contract definition '$CONTRACT_DEF_ID' already exists for $DISPLAY_NAME — skipping"
+                elif [ "$RESP_STATUS" -ge 400 ]; then
+                  echo "  ERROR: Failed to create contract definition for $DISPLAY_NAME (HTTP $RESP_STATUS)"
+                  exit 1
+                else
+                  echo "  ✓ Contract definition '$CONTRACT_DEF_ID' created for $DISPLAY_NAME"
+                fi
+              done
+
+              echo ""
+              echo "================================================"
+              echo "Step 6: Register Siglet Dataplane per Participant"
+              echo "================================================"
+              echo "  id           : {participantId}-siglet (unique per company context)"
+              echo "  transferTypes: HttpData-PULL"
+
+              set -- \
+                "airforgeseoem:AirForgeSEOEM" \
+                "eurothrusttier1:EuroThrustTier1" \
+                "wingworkstier1:WingWorksTier1" \
+                "rotortechtier2:RotorTechTier2" \
+                "hydromotiontier2:HydroMotionTier2" \
+                "aeroactuationtier2:AeroActuationTier2"
+
+              COMPANY_INDEX=0
+              for COMPANY in "$@"; do
+                COMPANY_INDEX=$((COMPANY_INDEX + 1))
+                PARTICIPANT_ID="${COMPANY%%:*}"
+                DISPLAY_NAME="${COMPANY#*:}"
+                DATAPLANE_ID="${PARTICIPANT_ID}-siglet"
+
+                echo ""
+                echo "────────────────────────────────────────────────"
+                echo "Participant $COMPANY_INDEX/6: $DISPLAY_NAME"
+                echo "  dataplaneId : $DATAPLANE_ID"
+                echo "────────────────────────────────────────────────"
+
+                echo "  Querying TM for participantContextId..."
+                do_curl -X POST "$TM_BASE_URL/api/v1alpha1/participant-profiles/query" \
+                  -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"predicate\": \"identifier like '%${PARTICIPANT_ID}%'\"}"
+                echo "    → HTTP $RESP_STATUS"
+                if [ "$RESP_STATUS" -ge 400 ]; then
+                  echo "  ERROR: TM query failed for $DISPLAY_NAME (HTTP $RESP_STATUS): $RESP_BODY"
+                  exit 1
+                fi
+                CONTEXT_ID=$(printf '%s\n' "$RESP_BODY" | grep -o '"participantContextId":"[^"]*"' | head -1 | cut -d'"' -f4) || CONTEXT_ID=""
+                if [ -z "$CONTEXT_ID" ]; then
+                  echo "  ERROR: participantContextId not found for $DISPLAY_NAME"
+                  exit 1
+                fi
+                echo "  participantContextId: $CONTEXT_ID"
+
+                DATAPLANE_ENDPOINT="http://siglet.edc-v.svc.cluster.local:8081/api/v1/${CONTEXT_ID}/dataflows"
+                echo "  PUT $CP_BASE_URL/v5beta/participants/$CONTEXT_ID/dataplanes"
+                echo "    endpoint: $DATAPLANE_ENDPOINT"
+                do_curl -X PUT "$CP_BASE_URL/v5beta/participants/$CONTEXT_ID/dataplanes" \
+                  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d '{
+                    "id": "'"$DATAPLANE_ID"'",
+                    "transferTypes": ["HttpData-PULL"],
+                    "endpoint": "'"$DATAPLANE_ENDPOINT"'"
+                  }'
+                echo "    → HTTP $RESP_STATUS"
+                echo "    → Body: $RESP_BODY"
+                if [ "$RESP_STATUS" -eq 409 ]; then
+                  echo "  ⚠ Dataplane '$DATAPLANE_ID' already exists for $DISPLAY_NAME — skipping"
+                elif [ "$RESP_STATUS" -ge 400 ]; then
+                  echo "  ERROR: Failed to register dataplane for $DISPLAY_NAME (HTTP $RESP_STATUS)"
+                  exit 1
+                else
+                  echo "  ✓ Dataplane '$DATAPLANE_ID' registered for $DISPLAY_NAME"
+                fi
+              done
+
+              echo ""
+              echo "================================================"
+              echo "Step 7: Discover Catalogs and Set Up Pairwise Contract Negotiations"
+              echo "================================================"
+              echo "  directed pairs : 6 participants x 5 providers = 30"
+              echo "  catalog calls  : 30 (Bruno request 24)"
+              echo "  negotiations   : 30 (Bruno request 25)"
+              echo "  agreement polls: until 30 agreement IDs are available (Bruno request 26)"
+              echo ""
+              echo "  Each participant acts as consumer once against every other provider."
+              echo "  The offer ID is resolved from the provider catalog immediately before"
+              echo "  creating the corresponding negotiation. Each new negotiation is then"
+              echo "  polled until the Control Plane returns its contractAgreementId."
+
+              # Resolve each participant context once for the pairwise loops.
+              # The generated values are intentionally not hardcoded because TenantManager
+              # assigns a fresh participantContextId whenever a new environment is seeded.
+              resolve_context_id() {
+                LOOKUP_PARTICIPANT_ID="$1"
+                LOOKUP_DISPLAY_NAME="$2"
+
+                echo "  Resolving participantContextId for $LOOKUP_DISPLAY_NAME..."
+                do_curl -X POST "$TM_BASE_URL/api/v1alpha1/participant-profiles/query" \
+                  -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"predicate\": \"identifier like '%${LOOKUP_PARTICIPANT_ID}%'\"}"
+                echo "    → HTTP $RESP_STATUS"
+                if [ "$RESP_STATUS" -ge 400 ]; then
+                  echo "  ERROR: TM query failed for $LOOKUP_DISPLAY_NAME (HTTP $RESP_STATUS): $RESP_BODY"
+                  exit 1
+                fi
+
+                RESOLVED_CONTEXT_ID=$(printf '%s\n' "$RESP_BODY" | grep -o '"participantContextId":"[^"]*"' | head -1 | cut -d'"' -f4) || RESOLVED_CONTEXT_ID=""
+                if [ -z "$RESOLVED_CONTEXT_ID" ]; then
+                  echo "  ERROR: participantContextId not found for $LOOKUP_DISPLAY_NAME"
+                  exit 1
+                fi
+                echo "    participantContextId: $RESOLVED_CONTEXT_ID"
+              }
+
+              resolve_context_id "airforgeseoem" "AirForgeSEOEM"
+              AIRFORGESEOEM_CONTEXT_ID="$RESOLVED_CONTEXT_ID"
+
+              resolve_context_id "eurothrusttier1" "EuroThrustTier1"
+              EUROTHRUSTTIER1_CONTEXT_ID="$RESOLVED_CONTEXT_ID"
+
+              resolve_context_id "wingworkstier1" "WingWorksTier1"
+              WINGWORKSTIER1_CONTEXT_ID="$RESOLVED_CONTEXT_ID"
+
+              resolve_context_id "rotortechtier2" "RotorTechTier2"
+              ROTORTECHTIER2_CONTEXT_ID="$RESOLVED_CONTEXT_ID"
+
+              resolve_context_id "hydromotiontier2" "HydroMotionTier2"
+              HYDROMOTIONTIER2_CONTEXT_ID="$RESOLVED_CONTEXT_ID"
+
+              resolve_context_id "aeroactuationtier2" "AeroActuationTier2"
+              AEROACTUATIONTIER2_CONTEXT_ID="$RESOLVED_CONTEXT_ID"
+
+              context_for() {
+                case "$1" in
+                  airforgeseoem) echo "$AIRFORGESEOEM_CONTEXT_ID" ;;
+                  eurothrusttier1) echo "$EUROTHRUSTTIER1_CONTEXT_ID" ;;
+                  wingworkstier1) echo "$WINGWORKSTIER1_CONTEXT_ID" ;;
+                  rotortechtier2) echo "$ROTORTECHTIER2_CONTEXT_ID" ;;
+                  hydromotiontier2) echo "$HYDROMOTIONTIER2_CONTEXT_ID" ;;
+                  aeroactuationtier2) echo "$AEROACTUATIONTIER2_CONTEXT_ID" ;;
+                  *) echo "ERROR: Unknown participant ID '$1'" >&2; exit 1 ;;
+                esac
+              }
+
+              display_for() {
+                case "$1" in
+                  airforgeseoem) echo "AirForgeSEOEM" ;;
+                  eurothrusttier1) echo "EuroThrustTier1" ;;
+                  wingworkstier1) echo "WingWorksTier1" ;;
+                  rotortechtier2) echo "RotorTechTier2" ;;
+                  hydromotiontier2) echo "HydroMotionTier2" ;;
+                  aeroactuationtier2) echo "AeroActuationTier2" ;;
+                  *) echo "$1" ;;
+                esac
+              }
+
+              set -- \
+                "airforgeseoem" \
+                "eurothrusttier1" \
+                "wingworkstier1" \
+                "rotortechtier2" \
+                "hydromotiontier2" \
+                "aeroactuationtier2"
+
+              # Keep a compact end-of-run transfer matrix.
+              # Format: consumerId|consumerDisplayName|providerId|providerDisplayName|transferId
+              TRANSFER_SUMMARY_FILE="/tmp/connector-transfer-summary.txt"
+              : > "$TRANSFER_SUMMARY_FILE"
+
+              PAIR_INDEX=0
+              TRANSFER_COUNT=0
+              for CONSUMER_ID in "$@"; do
+                CONSUMER_DISPLAY_NAME=$(display_for "$CONSUMER_ID")
+                CONSUMER_CONTEXT_ID=$(context_for "$CONSUMER_ID")
+
+                for PROVIDER_ID in "$@"; do
+                  if [ "$CONSUMER_ID" = "$PROVIDER_ID" ]; then
+                    continue
+                  fi
+
+                  PAIR_INDEX=$((PAIR_INDEX + 1))
+                  PROVIDER_DISPLAY_NAME=$(display_for "$PROVIDER_ID")
+                  PROVIDER_CONTEXT_ID=$(context_for "$PROVIDER_ID")
+                  PROVIDER_DID="did:web:identityhub.edc-v.svc.cluster.local%3A7083:${PROVIDER_ID}"
+                  PROVIDER_ASSET_ID="${PROVIDER_ID}_cert_asset"
+                  COUNTER_PARTY_ADDRESS="${CONTROLPLANE_DSP_BASE_URL}/${PROVIDER_CONTEXT_ID}/http-dsp-profile-2025-1"
+
+                  echo ""
+                  echo "────────────────────────────────────────────────"
+                  echo "Directed Pair $PAIR_INDEX/30: $CONSUMER_DISPLAY_NAME → $PROVIDER_DISPLAY_NAME"
+                  echo "  consumerContextId : $CONSUMER_CONTEXT_ID"
+                  echo "  providerContextId : $PROVIDER_CONTEXT_ID"
+                  echo "  providerDID       : $PROVIDER_DID"
+                  echo "  providerAssetId   : $PROVIDER_ASSET_ID"
+                  echo "────────────────────────────────────────────────"
+
+                  CATALOG_REQUEST_BODY='{
+                    "@context": ["https://w3id.org/edc/connector/management/v2"],
+                    "@type": "CatalogRequest",
+                    "protocol": "http-dsp-profile-2025-1",
+                    "counterPartyAddress": "'"$COUNTER_PARTY_ADDRESS"'",
+                    "counterPartyId": "'"$PROVIDER_DID"'"
+                  }'
+
+                  echo "  [7a] POST $CP_BASE_URL/v5beta/participants/$CONSUMER_CONTEXT_ID/catalog/request"
+                  echo "    request body: $CATALOG_REQUEST_BODY"
+                  do_curl -X POST "$CP_BASE_URL/v5beta/participants/$CONSUMER_CONTEXT_ID/catalog/request" \
+                    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -H "Accept: application/json" \
+                    --data-binary "$CATALOG_REQUEST_BODY"
+                  echo "    → HTTP $RESP_STATUS"
+                  if [ "$RESP_STATUS" -ge 400 ]; then
+                    echo "  ERROR: Catalog request failed for $CONSUMER_DISPLAY_NAME → $PROVIDER_DISPLAY_NAME (HTTP $RESP_STATUS)"
+                    echo "  Response: $RESP_BODY"
+                    exit 1
+                  fi
+
+                  if ! printf '%s\n' "$RESP_BODY" | grep -q "$PROVIDER_ASSET_ID"; then
+                    echo "  ERROR: Expected provider asset '$PROVIDER_ASSET_ID' not found in catalog"
+                    echo "  Response: $RESP_BODY"
+                    exit 1
+                  fi
+
+                  # Select the offer attached to this provider's company-specific asset.
+                  # Do not take the first offer in the catalog: an older manually-created
+                  # test asset may still exist in the same participant context.
+                  CATALOG_COMPACT=$(printf '%s\n' "$RESP_BODY" | tr -d '\n\r')
+                  MATCHED_DATASET_SUFFIX=$(printf '%s\n' "$CATALOG_COMPACT" \
+                    | sed -n 's/^.*"@id"[[:space:]]*:[[:space:]]*"'"$PROVIDER_ASSET_ID"'"//p')
+
+                  if [ -z "$MATCHED_DATASET_SUFFIX" ]; then
+                    echo "  ERROR: Dataset '$PROVIDER_ASSET_ID' could not be isolated in the catalog"
+                    echo "  Response: $RESP_BODY"
+                    exit 1
+                  fi
+
+                  OFFER_ID=$(printf '%s\n' "$MATCHED_DATASET_SUFFIX" \
+                    | grep -o '"@id"[[:space:]]*:[[:space:]]*"[^"]*"[[:space:]]*,[[:space:]]*"@type"[[:space:]]*:[[:space:]]*"Offer"' \
+                    | head -1 \
+                    | sed 's/.*"@id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/') || OFFER_ID=""
+
+                  if [ -z "$OFFER_ID" ]; then
+                    echo "  ERROR: Catalog offer ID for dataset '$PROVIDER_ASSET_ID' not found for $CONSUMER_DISPLAY_NAME → $PROVIDER_DISPLAY_NAME"
+                    echo "  Response: $RESP_BODY"
+                    exit 1
+                  fi
+                  echo "    ✓ Catalog offer resolved"
+                  echo "      offerId: $OFFER_ID"
+
+                  echo "  [7b] POST $CP_BASE_URL/v5beta/participants/$CONSUMER_CONTEXT_ID/contractnegotiations"
+                  do_curl -X POST "$CP_BASE_URL/v5beta/participants/$CONSUMER_CONTEXT_ID/contractnegotiations" \
+                    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -d '{
+                      "@context": ["https://w3id.org/edc/connector/management/v2"],
+                      "@type": "ContractRequest",
+                      "protocol": "http-dsp-profile-2025-1",
+                      "counterPartyAddress": "'"$COUNTER_PARTY_ADDRESS"'",
+                      "policy": {
+                        "@id": "'"$OFFER_ID"'",
+                        "@type": "Offer",
+                        "target": "'"$PROVIDER_ASSET_ID"'",
+                        "assigner": "'"$PROVIDER_DID"'",
+                        "permission": [
+                          {
+                            "action": "use",
+                            "constraint": [
+                              {
+                                "leftOperand": "AeroMembershipCredential",
+                                "operator": "eq",
+                                "rightOperand": "active"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }'
+                  echo "    → HTTP $RESP_STATUS"
+                  echo "    → Body: $RESP_BODY"
+                  if [ "$RESP_STATUS" -ge 400 ]; then
+                    echo "  ERROR: Contract negotiation setup failed for $CONSUMER_DISPLAY_NAME → $PROVIDER_DISPLAY_NAME (HTTP $RESP_STATUS)"
+                    exit 1
+                  fi
+
+                  NEGOTIATION_ID=$(printf '%s\n' "$RESP_BODY" \
+                    | tr -d '\n\r' \
+                    | sed -n 's/.*"@id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+                  if [ -z "$NEGOTIATION_ID" ]; then
+                    echo "  ERROR: Negotiation ID not found for $CONSUMER_DISPLAY_NAME → $PROVIDER_DISPLAY_NAME"
+                    exit 1
+                  fi
+
+                  echo "    ✓ Contract negotiation created"
+                  echo "      negotiationId: $NEGOTIATION_ID"
+                  echo "NEGOTIATION_RESULT consumer=$CONSUMER_ID provider=$PROVIDER_ID negotiationId=$NEGOTIATION_ID"
+
+                  echo "  [7c] Poll GET $CP_BASE_URL/v5beta/participants/$CONSUMER_CONTEXT_ID/contractnegotiations/$NEGOTIATION_ID"
+                  AGREEMENT_ID=""
+                  POLL_ATTEMPT=1
+                  MAX_POLL_ATTEMPTS=60
+                  POLL_INTERVAL_SECONDS=2
+                  while [ "$POLL_ATTEMPT" -le "$MAX_POLL_ATTEMPTS" ]; do
+                    do_curl -X GET "$CP_BASE_URL/v5beta/participants/$CONSUMER_CONTEXT_ID/contractnegotiations/$NEGOTIATION_ID" \
+                      -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+                      -H "Content-Type: application/json"
+                    echo "    → attempt $POLL_ATTEMPT/$MAX_POLL_ATTEMPTS  HTTP $RESP_STATUS"
+                    if [ "$RESP_STATUS" -ge 400 ]; then
+                      echo "  ERROR: Contract negotiation poll failed for $CONSUMER_DISPLAY_NAME → $PROVIDER_DISPLAY_NAME (HTTP $RESP_STATUS)"
+                      echo "  Response: $RESP_BODY"
+                      exit 1
+                    fi
+
+                    NEGOTIATION_STATE=$(printf '%s\n' "$RESP_BODY" \
+                      | tr -d '\n\r' \
+                      | sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+                    AGREEMENT_ID=$(printf '%s\n' "$RESP_BODY" \
+                      | tr -d '\n\r' \
+                      | sed -n 's/.*"contractAgreementId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+
+                    if [ -n "$NEGOTIATION_STATE" ]; then
+                      echo "      state: $NEGOTIATION_STATE"
+                    fi
+                    if [ -n "$AGREEMENT_ID" ]; then
+                      echo "    ✓ Contract agreement available"
+                      echo "      agreementId: $AGREEMENT_ID"
+                      echo "AGREEMENT_RESULT consumer=$CONSUMER_ID provider=$PROVIDER_ID negotiationId=$NEGOTIATION_ID agreementId=$AGREEMENT_ID"
+                      break
+                    fi
+
+                    case "$NEGOTIATION_STATE" in
+                      *TERMINATED*|*ERROR*)
+                        echo "  ERROR: Negotiation reached terminal state '$NEGOTIATION_STATE' for $CONSUMER_DISPLAY_NAME → $PROVIDER_DISPLAY_NAME"
+                        echo "  Response: $RESP_BODY"
+                        exit 1
+                        ;;
+                    esac
+
+                    if [ "$POLL_ATTEMPT" -eq "$MAX_POLL_ATTEMPTS" ]; then
+                      echo "  ERROR: Timed out waiting for contractAgreementId for $CONSUMER_DISPLAY_NAME → $PROVIDER_DISPLAY_NAME"
+                      echo "  Last response: $RESP_BODY"
+                      exit 1
+                    fi
+                    POLL_ATTEMPT=$((POLL_ATTEMPT + 1))
+                    sleep "$POLL_INTERVAL_SECONDS"
+                  done
+
+                  echo "  [8] POST $CP_BASE_URL/v5beta/participants/$CONSUMER_CONTEXT_ID/transferprocesses"
+                  TRANSFER_REQUEST_BODY='{
+                    "@context": ["https://w3id.org/edc/connector/management/v2"],
+                    "@type": "TransferRequest",
+                    "protocol": "http-dsp-profile-2025-1",
+                    "counterPartyAddress": "'"$COUNTER_PARTY_ADDRESS"'",
+                    "contractId": "'"$AGREEMENT_ID"'",
+                    "transferType": "HttpData-PULL"
+                  }'
+                  echo "    request body: $TRANSFER_REQUEST_BODY"
+                  do_curl -X POST "$CP_BASE_URL/v5beta/participants/$CONSUMER_CONTEXT_ID/transferprocesses" \
+                    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -H "Accept: application/json" \
+                    --data-binary "$TRANSFER_REQUEST_BODY"
+                  echo "    → HTTP $RESP_STATUS"
+                  echo "    → Body: $RESP_BODY"
+                  if [ "$RESP_STATUS" -ge 400 ]; then
+                    echo "  ERROR: Transfer setup failed for $CONSUMER_DISPLAY_NAME → $PROVIDER_DISPLAY_NAME (HTTP $RESP_STATUS)"
+                    exit 1
+                  fi
+
+                  TRANSFER_ID=$(printf '%s\n' "$RESP_BODY" \
+                    | tr -d '\n\r' \
+                    | sed -n 's/.*"@id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+                  if [ -z "$TRANSFER_ID" ]; then
+                    echo "  ERROR: Transfer process ID not found for $CONSUMER_DISPLAY_NAME → $PROVIDER_DISPLAY_NAME"
+                    exit 1
+                  fi
+
+                  TRANSFER_COUNT=$((TRANSFER_COUNT + 1))
+                  echo "    ✓ Transfer process initialized"
+                  echo "      transferId: $TRANSFER_ID"
+                  echo "TRANSFER_RESULT consumer=$CONSUMER_ID provider=$PROVIDER_ID agreementId=$AGREEMENT_ID transferId=$TRANSFER_ID"
+                  printf '%s|%s|%s|%s|%s\n' \
+                    "$CONSUMER_ID" "$CONSUMER_DISPLAY_NAME" "$PROVIDER_ID" "$PROVIDER_DISPLAY_NAME" "$TRANSFER_ID" \
+                    >> "$TRANSFER_SUMMARY_FILE"
+                done
+              done
+
+              if [ "$PAIR_INDEX" -ne 30 ]; then
+                echo "ERROR: Expected 30 directed negotiations but created $PAIR_INDEX"
+                exit 1
+              fi
+              if [ "$TRANSFER_COUNT" -ne 30 ]; then
+                echo "ERROR: Expected 30 directed transfers but created $TRANSFER_COUNT"
+                exit 1
+              fi
+
+              echo ""
+              echo "================================================"
+              echo "Connector Seeding Steps 1-8 Complete"
+              echo "  Catalog requests completed       : $PAIR_INDEX"
+              echo "  Contract negotiations initialized: $PAIR_INDEX"
+              echo "  Contract agreements obtained     : $PAIR_INDEX"
+              echo "  Transfer processes initialized   : $TRANSFER_COUNT"
+              echo "================================================"
+              echo ""
+              echo "================================================"
+              echo "Transfer ID Summary by Consumer Company"
+              echo "================================================"
+              for SUMMARY_CONSUMER_ID in "$@"; do
+                SUMMARY_CONSUMER_DISPLAY_NAME=$(display_for "$SUMMARY_CONSUMER_ID")
+                SUMMARY_CONSUMER_CONTEXT_ID=$(context_for "$SUMMARY_CONSUMER_ID")
+                echo ""
+                echo "$SUMMARY_CONSUMER_DISPLAY_NAME"
+                echo "  participantContextId: $SUMMARY_CONSUMER_CONTEXT_ID"
+                while IFS='|' read -r REC_CONSUMER_ID REC_CONSUMER_DISPLAY_NAME REC_PROVIDER_ID REC_PROVIDER_DISPLAY_NAME REC_TRANSFER_ID; do
+                  if [ "$REC_CONSUMER_ID" = "$SUMMARY_CONSUMER_ID" ]; then
+                    echo "  → $REC_PROVIDER_DISPLAY_NAME"
+                    echo "    transferId: $REC_TRANSFER_ID"
+                  fi
+                done < "$TRANSFER_SUMMARY_FILE"
+              done
+              echo ""
+              echo "================================================"

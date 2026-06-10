@@ -1,0 +1,143 @@
+#
+# Copyright (c) 2025 Metaform Systems, Inc.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Contributors:
+#      Metaform Systems, Inc. - initial API and implementation
+#
+
+
+---
+name: "Run E2E Tests"
+
+on:
+  push:
+  pull_request:
+
+  workflow_run:
+    workflows: [ "Draft Release" ]
+    types:
+      - completed
+
+  schedule:
+    - cron: '0 3 * * *'  # Run at 3am UTC every day
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+
+jobs:
+  E2E-Tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: eclipse-edc/.github/.github/actions/setup-build@main
+
+      - name: "Setup Kubectl"
+        uses: azure/setup-kubectl@v5
+      - name: "Set up Helm"
+        uses: azure/setup-helm@v5
+
+      - name: "Restore Docker image cache"
+        id: cache-docker
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-images
+          key: docker-images-${{ github.sha }}
+
+      - name: "Load cached Docker images"
+        if: steps.cache-docker.outputs.cache-hit == 'true'
+        run: |
+          for f in /tmp/docker-images/*.tar; do docker load -i "$f"; done
+
+      - name: "Build runtime images"
+        if: steps.cache-docker.outputs.cache-hit != 'true'
+        run: ./gradlew dockerize
+
+      - name: "Save Docker images to cache"
+        if: steps.cache-docker.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/docker-images
+          docker save ghcr.io/eclipse-dataspace-hub/jad/controlplane:latest  > /tmp/docker-images/controlplane.tar
+          docker save ghcr.io/eclipse-dataspace-hub/jad/dataplane:latest     > /tmp/docker-images/dataplane.tar
+          docker save ghcr.io/eclipse-dataspace-hub/jad/identity-hub:latest  > /tmp/docker-images/identity-hub.tar
+          docker save ghcr.io/eclipse-dataspace-hub/jad/issuerservice:latest > /tmp/docker-images/issuerservice.tar
+      
+      - name: "Create k8s Kind Cluster"
+        uses: helm/kind-action@v1.14.0
+        with:
+          cluster_name: jad
+
+      - name: "Load runtime images into KinD"
+        run: |-
+          kind load docker-image -n jad ghcr.io/eclipse-dataspace-hub/jad/controlplane:latest \
+                                ghcr.io/eclipse-dataspace-hub/jad/dataplane:latest \
+                                ghcr.io/eclipse-dataspace-hub/jad/identity-hub:latest \
+                                ghcr.io/eclipse-dataspace-hub/jad/issuerservice:latest
+
+
+      - name: "Install Traefik Gateway controller"
+        run: |-
+          helm repo add traefik https://traefik.github.io/charts
+          helm repo update
+          helm upgrade --install --namespace traefik traefik traefik/traefik --create-namespace -f values.yaml
+          
+          # Wait for traefik to be ready
+          kubectl rollout status deployment/traefik -n traefik --timeout=120s
+          
+          # forward port 80 -> 8080
+          kubectl -n traefik port-forward svc/traefik 8080:80 &
+          
+          # install Gateway API CRDs
+          kubectl apply --server-side --force-conflicts -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml
+          
+          sleep 5 # to be safe
+
+      - name: "Deploy JAD infrastructure"
+        run: |
+          # deploying the infrastructure first, wait for it to finish and deploying the applications afterwards is 
+          # the safest way to avoid race conditions between apps and infra, e.g. vault.
+          
+          kubectl apply -k k8s/base
+      - name: "Wait for JAD infrastructure to be ready"
+        run: |-
+          kubectl wait --namespace edc-v \
+            --for=condition=ready pod \
+            --selector=type=edcv-infra \
+            --timeout=300s
+
+
+      - name: "Deploy JAD applications"
+        run: |-
+          # this is crucial - without it, KinD would take the prebuilt images from GHCR
+          sed -i "s/imagePullPolicy:.*Always/imagePullPolicy: Never/g" k8s/apps/edc/controlplane.yaml
+          sed -i "s/imagePullPolicy:.*Always/imagePullPolicy: Never/g" k8s/apps/edc/dataplane.yaml
+          sed -i "s/imagePullPolicy:.*Always/imagePullPolicy: Never/g" k8s/apps/edc/issuerservice.yaml
+          sed -i "s/imagePullPolicy:.*Always/imagePullPolicy: Never/g" k8s/apps/edc/identityhub.yaml
+          
+          kubectl apply -k k8s/apps
+
+      - name: "Wait for JAD applications to be ready"
+        run: |-
+          # wait until all init jobs are done
+          kubectl wait --namespace edc-v \
+            --selector=type=edcv-job \
+            --for=condition=complete job --all \
+            --timeout=300s
+
+      - name: "Run E2E Test"
+        run: |
+          ./gradlew test -DincludeTags="EndToEndTest"
+
+      - name: "Destroy the KinD cluster"
+        run: >-
+          kind delete cluster -n jad

@@ -1,0 +1,316 @@
+#
+# Copyright (c) 2025 Metaform Systems, Inc.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Contributors:
+#      Metaform Systems, Inc. - initial API and implementation
+#
+
+## This seed job creates a tenant for the "issuer" in the IssuerService, as well as creates an Attestation Definition and
+## Credential Definition.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: issuerservice-seed
+  namespace: edc-v
+  labels:
+    app: issuerservice-seed
+    platform: edcv
+    type: edcv-job
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: issuerservice-seed
+        platform: edcv
+        type: edcv-job
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        # Wait for issuerservice to be ready
+        - name: wait-for-issuerservice
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              until curl -sf http://issuerservice.edc-v.svc.cluster.local:10010/api/check/readiness; do
+                echo "Waiting for issuerservice to be ready..."
+                sleep 5
+              done
+              echo ""
+              echo "IssuerService is ready!"
+      containers:
+        - name: seed-issuerservice
+          image: curlimages/curl:latest
+          env:
+            - name: KC_HOST
+              value: "http://keycloak.edc-v.svc.cluster.local:8080"
+            - name: ISSUER_CLIENT_ID
+              value: "issuer"
+            - name: ISSUER_CLIENT_SECRET
+              value: "issuer-secret"
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+
+              # Executes a curl request and stores the response body in RESP_BODY and status code in RESP_STATUS.
+              do_curl() {
+                RESP=$(curl -s -w "\n%{http_code}" "$@")
+                RESP_STATUS=$(printf '%s\n' "$RESP" | tail -1)
+                RESP_BODY=$(printf '%s\n' "$RESP" | sed '$d')
+              }
+
+              echo "================================================"
+              echo "Step 1: Create Vault Access Token (Issuer)"
+              echo "================================================"
+
+              # Get Keycloak admin token
+              do_curl -X POST "${KC_HOST}/realms/master/protocol/openid-connect/token" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "grant_type=password" \
+                -d "username=admin" \
+                -d "password=admin" \
+                -d "client_id=admin-cli"
+              if [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to get Keycloak admin token (HTTP $RESP_STATUS): $RESP_BODY"
+                exit 1
+              fi
+              KC_TOKEN=$(printf '%s\n' "$RESP_BODY" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+              if [ -z "$KC_TOKEN" ]; then
+                echo "ERROR: Failed to parse Keycloak admin token from response: $RESP_BODY"
+                exit 1
+              fi
+
+              # Create Keycloak client for Vault access
+              echo "Creating Vault Access Client"
+              do_curl -X POST "${KC_HOST}/admin/realms/edcv/clients" \
+                -H "Authorization: Bearer ${KC_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "clientId": "'"${ISSUER_CLIENT_ID}"'",
+                  "name": "Issuer Client",
+                  "description": "Client for Vault Access (Issuer)",
+                  "enabled": true,
+                  "secret": "'"${ISSUER_CLIENT_SECRET}"'",
+                  "protocol": "openid-connect",
+                  "publicClient": false,
+                  "serviceAccountsEnabled": true,
+                  "standardFlowEnabled": false,
+                  "directAccessGrantsEnabled": false,
+                  "fullScopeAllowed": true,
+                  "protocolMappers": [
+                    {
+                      "name": "participantContextId",
+                      "protocol": "openid-connect",
+                      "protocolMapper": "oidc-hardcoded-claim-mapper",
+                      "consentRequired": false,
+                      "config": {
+                        "claim.name": "participant_context_id",
+                        "claim.value": "issuer",
+                        "jsonType.label": "String",
+                        "access.token.claim": "true",
+                        "id.token.claim": "true",
+                        "userinfo.token.claim": "true"
+                      }
+                    },
+                    {
+                      "name": "role",
+                      "protocol": "openid-connect",
+                      "protocolMapper": "oidc-hardcoded-claim-mapper",
+                      "consentRequired": false,
+                      "config": {
+                        "claim.name": "role",
+                        "claim.value": "participant",
+                        "jsonType.label": "String",
+                        "access.token.claim": "true",
+                        "id.token.claim": "true",
+                        "userinfo.token.claim": "true"
+                      }
+                    }
+                  ]
+                }'
+              if [ "$RESP_STATUS" -eq 409 ]; then
+                echo "⚠ Vault Access Client already exists"
+              elif [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to create Vault Access Client (HTTP $RESP_STATUS): $RESP_BODY"
+                exit 1
+              else
+                echo "✓ Vault Access Client created"
+              fi
+
+              echo ""
+              echo "================================================"
+              echo "Step 2: Create Issuer Tenant in IssuerService"
+              echo "================================================"
+
+              # Get provisioner token
+              do_curl -X POST "${KC_HOST}/realms/edcv/protocol/openid-connect/token" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "grant_type=client_credentials" \
+                -d "client_id=provisioner" \
+                -d "client_secret=provisioner-secret" \
+                -d "scope=issuer-admin-api:write"
+              if [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to get provisioner token (HTTP $RESP_STATUS): $RESP_BODY"
+                exit 1
+              fi
+              PROVISIONER_TOKEN=$(printf '%s\n' "$RESP_BODY" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+              if [ -z "$PROVISIONER_TOKEN" ]; then
+                echo "ERROR: Failed to parse provisioner token from response: $RESP_BODY"
+                exit 1
+              fi
+
+              # Create issuer tenant
+              do_curl -X POST "http://issuerservice.edc-v.svc.cluster.local:10015/api/identity/v1beta/participants" \
+                -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "roles": ["admin"],
+                  "serviceEndpoints": [
+                    {
+                      "type": "IssuerService",
+                      "serviceEndpoint": "http://issuerservice.edc-v.svc.cluster.local:10012/api/issuance/v1beta/participants/issuer",
+                      "id": "issuer-service-1"
+                    }
+                  ],
+                  "active": true,
+                  "participantContextId": "issuer",
+                  "did": "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer",
+                  "key": {
+                    "keyId": "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer#key-1",
+                    "privateKeyAlias": "key-1",
+                    "keyGeneratorParams": {
+                      "algorithm": "EdDSA"
+                    }
+                  },
+                  "additionalProperties": {
+                    "edc.vault.hashicorp.config": {
+                      "credentials": {
+                        "clientId": "'"${ISSUER_CLIENT_ID}"'",
+                        "clientSecret": "'"${ISSUER_CLIENT_SECRET}"'",
+                        "tokenUrl": "http://keycloak.edc-v.svc.cluster.local:8080/realms/edcv/protocol/openid-connect/token"
+                      },
+                      "config": {
+                        "secretPath": "v1/participants",
+                        "folderPath": "'"${ISSUER_CLIENT_ID}"'",
+                        "vaultUrl": "http://vault.edc-v.svc.cluster.local:8200"
+                      }
+                    }
+                  }
+                }'
+              if [ "$RESP_STATUS" -eq 409 ]; then
+                echo "⚠ Issuer tenant already exists"
+              elif [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to create issuer tenant (HTTP $RESP_STATUS): $RESP_BODY"
+                exit 1
+              else
+                echo "✓ Issuer tenant created"
+              fi
+
+              echo ""
+              echo "================================================"
+              echo "Step 3: Create AttestationDefinitions"
+              echo "================================================"
+
+              # Get issuer token
+              do_curl -X POST "${KC_HOST}/realms/edcv/protocol/openid-connect/token" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "grant_type=client_credentials" \
+                -d "client_id=issuer" \
+                -d "client_secret=issuer-secret" \
+                -d "scope=issuer-admin-api:write"
+              if [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to get issuer token (HTTP $RESP_STATUS): $RESP_BODY"
+                exit 1
+              fi
+              ISSUER_TOKEN=$(printf '%s\n' "$RESP_BODY" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+              if [ -z "$ISSUER_TOKEN" ]; then
+                echo "ERROR: Failed to parse issuer token from response: $RESP_BODY"
+                exit 1
+              fi
+
+              # Create attestation definition
+              echo "Creating Membership AttestationDefinition"
+              do_curl -X POST "http://issuerservice.edc-v.svc.cluster.local:10013/api/admin/v1beta/participants/issuer/attestations" \
+                -H "Authorization: Bearer ${ISSUER_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "attestationType": "membership",
+                  "configuration": {},
+                  "id": "membership-attestation-def-1"
+                }'
+              if [ "$RESP_STATUS" -eq 409 ]; then
+                echo "⚠ Membership AttestationDefinition already exists"
+              elif [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to create Membership AttestationDefinition (HTTP $RESP_STATUS): $RESP_BODY"
+                exit 1
+              else
+                echo "✓ Membership AttestationDefinition created"
+              fi
+              
+              echo ""
+              echo "================================================"
+              echo "Step 4: Create CredentialDefinition"
+              echo "================================================"
+
+              # Create credential definition
+              echo "Creating Aero Membership CredentialDefinition"
+              do_curl -X POST "http://issuerservice.edc-v.svc.cluster.local:10013/api/admin/v1beta/participants/issuer/credentialdefinitions" \
+                -H "Authorization: Bearer ${ISSUER_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "attestations": ["membership-attestation-def-1"],
+                  "credentialType": "AeroMembershipCredential",
+                  "id": "aero-membership-credential-def",
+                  "jsonSchema": "{}",
+                  "jsonSchemaUrl": "https://example.com/schema/membership-credential.json",
+                  "mappings": [
+                    {
+                      "input": "membership",
+                      "output": "credentialSubject.membership",
+                      "required": true
+                    },
+                    {
+                      "input": "membershipType",
+                      "output": "credentialSubject.membershipType",
+                      "required": "true"
+                    },
+                    {
+                      "input": "membershipStartDate",
+                      "output": "credentialSubject.membershipStartDate",
+                      "required": true
+                    },
+                    {
+                      "input": "id",
+                      "output": "credentialSubject.id",
+                      "required": true
+                    }
+                  ],
+                  "rules": [],
+                  "format": "vc20-bssl/jwt",
+                  "validity": "604800"
+                }'
+              if [ "$RESP_STATUS" -eq 409 ]; then
+                echo "⚠  Aero Membership CredentialDefinition already exists"
+              elif [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to create Aero Membership CredentialDefinition (HTTP $RESP_STATUS): $RESP_BODY"
+                exit 1
+              else
+                echo "✓ Aero Membership CredentialDefinition created"
+              fi
+
+              
+              echo ""
+              echo "================================================"
+              echo "IssuerService seeding completed successfully!"
+              echo "================================================"

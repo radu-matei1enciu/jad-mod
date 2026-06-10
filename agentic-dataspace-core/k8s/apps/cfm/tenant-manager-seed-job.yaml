@@ -1,0 +1,355 @@
+#
+# Copyright (c) 2025 Metaform Systems, Inc.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Contributors:
+#      Metaform Systems, Inc. - initial API and implementation
+#
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tenant-manager-seed
+  namespace: edc-v
+  labels:
+    app: tenant-manager-seed
+    platform: edcv
+    type: edcv-job
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: tenant-manager-seed
+        platform: edcv
+        type: edcv-job
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        # Wait for tenant-manager to be ready
+        - name: wait-for-tenant-manager
+          image: curlimages/curl:latest
+          env:
+            - name: KC_HOST
+              value: "http://keycloak.edc-v.svc.cluster.local:8080"
+          command:
+            - sh
+            - -c
+            - |
+              echo "Obtaining provisioner token for tenant-manager readiness check..."
+              TOKEN=$(curl -sf -X POST "${KC_HOST}/realms/edcv/protocol/openid-connect/token" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "grant_type=client_credentials" \
+                -d "client_id=provisioner" \
+                -d "client_secret=provisioner-secret" \
+                -d "scope=tenant-manager-api:read" \
+                | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+              echo "Token obtained. Polling tenant-manager cells endpoint..."
+              until curl -sf -H "Authorization: Bearer ${TOKEN}" http://tenant-manager.edc-v.svc.cluster.local:8080/api/v1alpha1/cells; do
+                echo "Waiting for tenant-manager to be ready..."
+                sleep 5
+              done
+              echo "Tenant Manager is ready!"
+
+        # Wait for IssuerService to be fully seeded (issuerservice-seed must have run first).
+        # The registration-activity calls IssuerService to create a credential holder for each
+        # participant. If the issuer ParticipantContext does not yet exist, IssuerService returns
+        # 404 and the entire orchestration errors and rolls back to "disposed".
+        # We check the issuer DID document on port 10016 (unauthenticated, served by IssuerService's
+        # embedded IdentityHub). This document only becomes available after issuerservice-seed
+        # step 2 (create issuer tenant) completes — exactly when the registration-activity needs it.
+        - name: wait-for-issuerservice-seeded
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              echo "Polling IssuerService DID document (http://issuerservice.edc-v.svc.cluster.local:10016/issuer/did.json)..."
+              until curl -sf \
+                "http://issuerservice.edc-v.svc.cluster.local:10016/issuer/did.json" \
+                | grep -q '"id"'; do
+                echo "Waiting for IssuerService issuer to be seeded..."
+                sleep 5
+              done
+              echo "IssuerService issuer is ready!"
+      containers:
+        - name: seed-tenant-manager
+          image: curlimages/curl:latest
+          env:
+            - name: TM_BASE_URL
+              value: "http://tenant-manager.edc-v.svc.cluster.local:8080"
+            - name: KC_HOST
+              value: "http://keycloak.edc-v.svc.cluster.local:8080"
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+
+              # Executes a curl request and stores the response body in RESP_BODY and status code in RESP_STATUS.
+              do_curl() {
+                RESP=$(curl -s -w "\n%{http_code}" "$@")
+                RESP_STATUS=$(printf '%s\n' "$RESP" | tail -1)
+                RESP_BODY=$(printf '%s\n' "$RESP" | sed '$d')
+              }
+
+              echo "================================================"
+              echo "Step 1: Obtain Provisioner Token"
+              echo "================================================"
+              echo "POST ${KC_HOST}/realms/edcv/protocol/openid-connect/token"
+              echo "  client_id=provisioner  scope=tenant-manager-api:write"
+
+              do_curl -X POST "${KC_HOST}/realms/edcv/protocol/openid-connect/token" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "grant_type=client_credentials" \
+                -d "client_id=provisioner" \
+                -d "client_secret=provisioner-secret" \
+                -d "scope=tenant-manager-api:write"
+              echo "  → HTTP $RESP_STATUS"
+              if [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to get provisioner token: $RESP_BODY"
+                exit 1
+              fi
+              PROVISIONER_TOKEN=$(printf '%s\n' "$RESP_BODY" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+              if [ -z "$PROVISIONER_TOKEN" ]; then
+                echo "ERROR: Failed to parse provisioner token from response: $RESP_BODY"
+                exit 1
+              fi
+              echo "✓ Provisioner token obtained"
+
+              echo ""
+              echo "================================================"
+              echo "Step 2: TenantManager Infrastructure Seeding"
+              echo "================================================"
+
+              # ── Create Cell ──────────────────────────────────────
+              echo ""
+              echo "POST $TM_BASE_URL/api/v1alpha1/cells"
+              do_curl -X POST "$TM_BASE_URL/api/v1alpha1/cells" \
+                -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "properties": {
+                    "newCellKey": "newCellValue"
+                  },
+                  "state": "active",
+                  "stateTimestamp": "'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'"
+                }'
+              echo "  → HTTP $RESP_STATUS"
+              echo "  → Body: $RESP_BODY"
+              if [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to create Cell (HTTP $RESP_STATUS)"
+                exit 1
+              fi
+              CELL_ID=$(printf '%s\n' "$RESP_BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+              echo "✓ Cell created — ID: $CELL_ID"
+
+              # ── Create Dataspace Profile ──────────────────────────
+              echo ""
+              echo "POST $TM_BASE_URL/api/v1alpha1/dataspace-profiles"
+              do_curl -X POST "$TM_BASE_URL/api/v1alpha1/dataspace-profiles" \
+                -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "artifacts": [],
+                  "properties": {},
+                  "dataspaceSpec": {
+                     "protocolStack": ["dsp-2025-1", "dcp-2025-1"],
+                     "credentialSpecs": [{
+                        "type": "AeroMembershipCredential",
+                        "issuer": "did:web:issuerservice.edc-v.svc.cluster.local%3A10016:issuer",
+                        "format": "vc20-bssl/jwt",
+                        "id": "aero-membership-credential-def"
+                      }
+                    ]
+                  }
+                }'
+              echo "  → HTTP $RESP_STATUS"
+              echo "  → Body: $RESP_BODY"
+              if [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to create Dataspace Profile (HTTP $RESP_STATUS)"
+                exit 1
+              fi
+              DATASPACE_PROFILE_ID=$(printf '%s\n' "$RESP_BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+              echo "✓ Dataspace Profile created — ID: $DATASPACE_PROFILE_ID"
+
+              # ── Deploy Dataspace Profile ──────────────────────────
+              echo ""
+              echo "POST $TM_BASE_URL/api/v1alpha1/dataspace-profiles/$DATASPACE_PROFILE_ID/deployments"
+              echo "  profileId=$DATASPACE_PROFILE_ID  cellId=$CELL_ID"
+              do_curl -X POST "$TM_BASE_URL/api/v1alpha1/dataspace-profiles/$DATASPACE_PROFILE_ID/deployments" \
+                -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "profileId": "'"$DATASPACE_PROFILE_ID"'",
+                  "cellId": "'"$CELL_ID"'"
+                }'
+              echo "  → HTTP $RESP_STATUS"
+              echo "  → Body: $RESP_BODY"
+              if [ "$RESP_STATUS" -ge 400 ]; then
+                echo "ERROR: Failed to deploy Dataspace Profile (HTTP $RESP_STATUS)"
+                exit 1
+              fi
+              echo "✓ Dataspace Profile deployed"
+
+              echo ""
+              echo "================================================"
+              echo "Step 3: Seed Aero-X Participants"
+              echo "================================================"
+              echo "  Cell ID             : $CELL_ID"
+              echo "  Dataspace Profile ID: $DATASPACE_PROFILE_ID"
+
+              # Keep a compact end-of-run summary for the six companies.
+              # Format: DisplayName|participantId|did|tenantId|profileId|participantContextId
+              TENANT_SUMMARY_FILE="/tmp/tenant-manager-company-summary.txt"
+              : > "$TENANT_SUMMARY_FILE"
+
+              # Company definitions as positional parameters: "participantId:DisplayName"
+              # participantId drives the DID path; DisplayName is the human-readable tenant name.
+              set -- \
+                "airforgeseoem:AirForgeSEOEM" \
+                "eurothrusttier1:EuroThrustTier1" \
+                "wingworkstier1:WingWorksTier1" \
+                "rotortechtier2:RotorTechTier2" \
+                "hydromotiontier2:HydroMotionTier2" \
+                "aeroactuationtier2:AeroActuationTier2"
+
+              COMPANY_INDEX=0
+              for COMPANY in "$@"; do
+                COMPANY_INDEX=$((COMPANY_INDEX + 1))
+                PARTICIPANT_ID="${COMPANY%%:*}"
+                DISPLAY_NAME="${COMPANY#*:}"
+                DID="did:web:identityhub.edc-v.svc.cluster.local%3A7083:${PARTICIPANT_ID}"
+
+                echo ""
+                echo "────────────────────────────────────────────────"
+                echo "Participant $COMPANY_INDEX/6: $DISPLAY_NAME"
+                echo "  participantId : $PARTICIPANT_ID"
+                echo "  DID           : $DID"
+                echo "────────────────────────────────────────────────"
+
+                # ── 3a: Create Tenant ────────────────────────────────
+                TENANT_REQ_ID=$(cat /proc/sys/kernel/random/uuid)
+                echo ""
+                echo "  [3a] POST $TM_BASE_URL/api/v1alpha1/tenants"
+                echo "    name=$DISPLAY_NAME  location=eu"
+                do_curl -X POST "$TM_BASE_URL/api/v1alpha1/tenants" \
+                  -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d '{
+                    "id": "'"$TENANT_REQ_ID"'",
+                    "properties": {
+                      "name": "'"$DISPLAY_NAME"'",
+                      "location": "eu"
+                    }
+                  }'
+                echo "    → HTTP $RESP_STATUS"
+                echo "    → Body: $RESP_BODY"
+                if [ "$RESP_STATUS" -ge 400 ]; then
+                  echo "  ERROR: Failed to create tenant for $DISPLAY_NAME (HTTP $RESP_STATUS)"
+                  exit 1
+                fi
+                TENANT_ID=$(printf '%s\n' "$RESP_BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+                echo "  ✓ Tenant created — ID: $TENANT_ID"
+
+                # ── 3b: Deploy Participant Profile ────────────────────
+                PROFILE_REQ_ID=$(cat /proc/sys/kernel/random/uuid)
+                echo ""
+                echo "  [3b] POST $TM_BASE_URL/api/v1alpha1/tenants/$TENANT_ID/participant-profiles"
+                echo "    identifier=$DID"
+                echo "    cellId=$CELL_ID"
+                echo "    dataspaceProfileId=$DATASPACE_PROFILE_ID  role=manufacturer"
+                do_curl -X POST "$TM_BASE_URL/api/v1alpha1/tenants/${TENANT_ID}/participant-profiles" \
+                  -H "Authorization: Bearer ${PROVISIONER_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d '{
+                    "id": "'"$PROFILE_REQ_ID"'",
+                    "identifier": "'"$DID"'",
+                    "properties": {},
+                    "cellId": "'"$CELL_ID"'",
+                    "version": 0,
+                    "vpaProperties": {},
+                    "participantRoles": {
+                      "'"$DATASPACE_PROFILE_ID"'": ["manufacturer"]
+                    }
+                  }'
+                echo "    → HTTP $RESP_STATUS"
+                echo "    → Body: $RESP_BODY"
+                if [ "$RESP_STATUS" -ge 400 ]; then
+                  echo "  ERROR: Failed to deploy participant profile for $DISPLAY_NAME (HTTP $RESP_STATUS)"
+                  exit 1
+                fi
+                PROFILE_ID=$(printf '%s\n' "$RESP_BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+                echo "  ✓ Participant profile deployed — ID: $PROFILE_ID"
+
+                # ── 3c: Poll until VPAs active ────────────────────────
+                echo ""
+                echo "  [3c] Polling GET $TM_BASE_URL/api/v1alpha1/tenants/$TENANT_ID/participant-profiles/$PROFILE_ID"
+                echo "       (waiting for VPA state=active, fail-fast on error=true)"
+                MAX_POLLS=60
+                POLL_COUNT=0
+                ACTIVE_VPA=""
+                while [ -z "$ACTIVE_VPA" ]; do
+                  if [ "$POLL_COUNT" -ge "$MAX_POLLS" ]; then
+                    echo "  ERROR: Timed out after $((MAX_POLLS * 5))s waiting for $DISPLAY_NAME VPAs to become active"
+                    exit 1
+                  fi
+                  sleep 5
+                  POLL_COUNT=$((POLL_COUNT + 1))
+                  do_curl -X GET "$TM_BASE_URL/api/v1alpha1/tenants/${TENANT_ID}/participant-profiles/${PROFILE_ID}" \
+                    -H "Authorization: Bearer ${PROVISIONER_TOKEN}"
+                  echo "    → attempt $POLL_COUNT/$MAX_POLLS  HTTP $RESP_STATUS"
+                  echo "    → Body: $RESP_BODY"
+                  if [ "$RESP_STATUS" -lt 400 ]; then
+                    ERROR_FLAG=$(printf '%s\n' "$RESP_BODY" | grep -o '"error":true') || ERROR_FLAG=""
+                    if [ -n "$ERROR_FLAG" ]; then
+                      echo "  ERROR: Orchestration failed for $DISPLAY_NAME — VPAs disposed. Check provision-manager logs."
+                      exit 1
+                    fi
+                    ACTIVE_VPA=$(printf '%s\n' "$RESP_BODY" | grep -o '"state":"active"') || ACTIVE_VPA=""
+                    if [ -z "$ACTIVE_VPA" ]; then
+                      echo "    → No active VPA yet, continuing..."
+                    fi
+                  fi
+                done
+
+                CONTEXT_ID=$(printf '%s\n' "$RESP_BODY" | grep -o '"participantContextId":"[^"]*"' | head -1 | cut -d'"' -f4) || CONTEXT_ID=""
+                echo ""
+                echo "  ✓ $DISPLAY_NAME is ready!"
+                echo "    participantContextId : $CONTEXT_ID"
+                echo "    tenantId             : $TENANT_ID"
+                echo "    profileId            : $PROFILE_ID"
+
+                if [ -z "$CONTEXT_ID" ]; then
+                  echo "  ERROR: participantContextId not found for $DISPLAY_NAME"
+                  exit 1
+                fi
+                printf '%s|%s|%s|%s|%s|%s\n' \
+                  "$DISPLAY_NAME" "$PARTICIPANT_ID" "$DID" "$TENANT_ID" "$PROFILE_ID" "$CONTEXT_ID" \
+                  >> "$TENANT_SUMMARY_FILE"
+              done
+
+              echo ""
+              echo "================================================"
+              echo "TenantManager Seeding Complete"
+              echo "================================================"
+              echo ""
+              echo "================================================"
+              echo "Seeded Company ID Summary"
+              echo "================================================"
+              while IFS='|' read -r SUMMARY_DISPLAY_NAME SUMMARY_PARTICIPANT_ID SUMMARY_DID SUMMARY_TENANT_ID SUMMARY_PROFILE_ID SUMMARY_CONTEXT_ID; do
+                echo ""
+                echo "$SUMMARY_DISPLAY_NAME"
+                echo "  participantId        : $SUMMARY_PARTICIPANT_ID"
+                echo "  DID                  : $SUMMARY_DID"
+                echo "  tenantId             : $SUMMARY_TENANT_ID"
+                echo "  profileId            : $SUMMARY_PROFILE_ID"
+                echo "  participantContextId : $SUMMARY_CONTEXT_ID"
+              done < "$TENANT_SUMMARY_FILE"
+              echo ""
+              echo "================================================"

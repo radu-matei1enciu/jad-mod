@@ -1,0 +1,16 @@
+meta {
+  name: All Transfers
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{cpBaseUrl}}/v5beta/participants/d49bd6445f57417c98c029cc33d4cad8/transferprocesses/request
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}
