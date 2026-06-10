@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: redline
-          image: ghcr.io/radu-matei1enciu/redline-mod:latest
+          image: ghcr.io/radu-matei1enciu/redline-mod:demo-airbus
           imagePullPolicy: Always
           ports:
             - containerPort: 8081
