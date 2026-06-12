@@ -25,7 +25,6 @@ pluginManagement {
 }
 
 rootProject.name = "jad"
-include(":extensions:data-plane-certs")
 
 // launcher modules
 include(":launchers:identity-hub")
