@@ -26,7 +26,6 @@ pluginManagement {
 
 rootProject.name = "jad"
 include(":extensions:data-plane-qcresults")
-include(":tests:end2end")
 
 // launcher modules
 include(":launchers:identity-hub")

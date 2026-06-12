@@ -1,0 +1,22 @@
+meta {
+  name: 07 Consumer - Get Cells
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{tmBaseUrl}}/cells
+  body: json
+  auth: inherit
+}
+
+script:post-response {
+  let body = res.getBody()
+  test("Response contains id", function () {
+      expect(body[0]).to.have.property("id");
+  });
+  
+  if (body && body[0] && body[0].id) {
+      bru.setVar("cell_id", body[0].id);
+  }
+}

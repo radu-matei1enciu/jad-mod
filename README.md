@@ -1,5 +1,3 @@
-![logo](docs/images/logo.png)
-
 # JAD—Just Another Demonstrator
 
 JAD is a demonstrator that deploys a fully-fledged dataspace as a Software-as-a-Service (SaaS) solution in Kubernetes.
@@ -34,7 +32,6 @@ Such a dataspace requires – at a minimum – the following components:
 - a POSIX-compliant shell (e.g., bash, zsh)
 - [Bruno](https://www.usebruno.com) (or similar). The API requests here are optimized for Bruno, but other tools work as
   well. Bruno does offer a CLI client, but that does not handle token refresh automatically, so we'll use the GUI.
-- [optional]: a Kubernetes monitoring tool like K9S, Lens, Headlamp, etc. Not required, but certainly helpful.
 
 _All shell commands are executed from the root of the project unless stated otherwise._
 
@@ -63,7 +60,7 @@ helm upgrade --install --namespace traefik traefik traefik/traefik --create-name
 Then, install the custom resource definitions (CRDs) for the Gateway API:
 
 ```shell
-kubectl apply --server-side --force-conflicts -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/experimental-install.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml
 ```
 
 #### Enable network access to services
@@ -88,6 +85,12 @@ To set up port-forwarding, run the following command:
 
 ```shell
 kubectl -n traefik port-forward svc/traefik 80
+```
+
+If you require higher priviliges use sudo:
+
+```shell
+sudo kubectl --kubeconfig=/home/radu/.kube/config -n traefik port-forward svc/traefik 80
 ```
 
 This forwards port 80 from the host to the Traefik service inside the cluster. You may need to run this with `sudo`
@@ -267,121 +270,6 @@ postgres                  1/1     1            1           110m
 vault                     1/1     1            1           110m
 ```
 
-### 4. Inspect your deployment
-
-- database: the PostgreSQL database is accessible from outside the cluster via
-  `jdbc:postgresql://postgres.localhost/controlplane`, username `cp`, password `cp`.
-- vault: the vault is accessible from outside the cluster via `http://vault.localhost`, using token `root`.
-- keycloak: access `http://keycloak.localhost/` and use username `admin` and password `admin`
-
-**Caution: these are security-relevant credentials and must not be used in production! EVER!!**
-
-In addition, you should see the following Kubernetes jobs (`kubectl get jobs -n edc-v`) running:
-
-```text
-NAME                       STATUS     COMPLETIONS   DURATION   AGE
-issuerservice-seed         Complete   1/1           13s        119m
-provision-manager-seed     Complete   1/1           15s        119m
-vault-bootstrap            Complete   1/1           19s        120m
-```
-
-Those are needed to populate the databases and the vault with initial data.
-
-### 5. Prepare the data space
-
-In addition to the initial seed data, a few bits and pieces are required for it to become fully operational. These can
-be put in place by running the REST requests in the `CFM - Provision Consumer` folder and in the
-`CFM - Provision Provider`
-in the [Bruno collection](./requests/EDC-V%20Onboarding). Be sure to select the `"KinD Local"` environment in
-Bruno.
-
-![bruno.png](docs/images/bruno.png)
-
-Those requests can be run manually, one after the other, or via Bruno's "Run" feature. It may be necessary to manually
-refresh the access token in the `"Auth*"` tab.
-
-This creates a consumer and a provider participant using the Connector Fabric Manager's (CFM) REST API. CFM does a lot
-of the heavy lifting by doing the following:
-
-- creates access credentials for both the Vault and the Administration APIs
-- creates a `ParticipantContext` in the control plane
-- creates a `ParticipantContext` in IdentityHub
-- registers the new `ParticipantContext` with the IssuerService
-- requests VerifiableCredentials from the IssuerService
-
-N.B.: the `Get Participant Profile` may need to be run repeatedly until all entries in the `vpas` array have a
-`"state": "active"` field. This is because the deployment is an asynchronous process and all agents need to run before
-the profile is activated.
-
-## Seeding EDC-V CEL Expressions
-
-For evaluating policies EDC-V makes usage of the CEL (Common Expression Language) engine. To demonstrate this, we
-will create a simple CEL expression that allows data access only to participants that possess a valid Membership
-Credential.
-
-Run the requests in the `Create CEL expression` request in folder `EDC-V Management/Prepare consumer participant` in the
-same Bruno collection to create the CEL expression in the ControlPlane.
-
-![img.png](docs/images/bruno_cel_expr.png)
-
-## Seeding the Provider
-
-Before we can transfer data, we need to seed the Provider with an asset, a policy and a contract definition. This is
-done by running the requests in the `EDC-V Management/Provider` folder in the same Bruno collection. Again, make sure
-to select the
-`"KinD Local"` environment.
-
-![img.png](docs/images/bruno_provider_seed.png)
-
-**If all requests ran successfully, you should now have access credentials for both the consumer and the provider!**
-
-## Transfer Data
-
-Now that both participants are set up, we can transfer data from the Provider to the Consumer.
-The only use case supported here:
-
-- Certificates sharing via HTTP
-
-### Certificates sharing via HTTP
-
-The second use case demonstrates how certificates can be shared between participants using EDC-V's HTTP data
-transfer capabilities.
-
-First we need to upload a certificate to the Provider. This is done by running the
-`Data Transfer/Http Certs/Provider/Upload Certificate` request in Bruno:
-
-![img.png](docs/images/bruno_upload_certificate.png)
-
-by selecting a file to upload (e.g. a `.pdf` file). Additional metadata can be provided in the request body using
-the `metadata` field.
-
-Then perform the entire sequence by running both requests in the `Data Transfer/Http Certs/Consumer` folder in Bruno:
-
-![img.png](docs/images/bruno_certificate_consumer.png)
-
-which:
-
-- Fetches the catalog from the Provider storing the offer id for the certificate asset
-- Setup the Contract negotiation using the offer id
-- Poll the Contract Negotiation for the agreement id if the negotiation is successful
-- Setup the transfer request for the agreement id of the previous step
-- Fetch the access token for the transfer request (Siglet)
-- Query the provider for listing the available certificates storing the first certificate id
-- Finally, download the certificate using the certificate id
-
-## Automated tests
-
-JAD comes with a set of automated tests that can be run against the deployed services. These tests are located in the
-[tests/end2end](./tests/end2end) folder. To run them, deploy JAD without creating any resources, and then run the test
-suite:
-
-```shell
-./gradlew test -DincludeTags="EndToEndTest"
-```
-
-This may be particularly useful if you want to tinker with the code base, add or change stuff and would like to see if
-everything still works. Remember to rebuild and reload the docker images, though...
-
 ## Cleanup
 
 To remove the deployment, run:
@@ -398,201 +286,3 @@ entire base and all apps.
 For example, if a participant onboarding went only through half-way, we recommend to do a clean-slate redeployment.
 
 In some cases, even deleting and re-creating the KinD cluster may be required.
-
-## Deploying JAD on a bare-metal/cloud-hosted Kubernetes
-
-KinD is geared towards local development and testing. For example, it comes with a bunch of useful defaults, such as
-storage classes, load balancers, network plugins, etc. If you want to deploy JAD on a bare-metal or cloud-hosted
-Kubernetes cluster, then there are some caveats to keep in mind.
-
-### Configure network access and DNS
-
-EDC-V, Keycloak and Vault will need to be accessible from outside the cluster. For this, your cluster needs a network
-plugin and an external load balancer. For bare-metal installations, consider using [MetalLB](https://metallb.io).
-
-In addition, you'll likely want DNS resolution for your cluster so that individual services can be reached via
-subdomains, e.g. `http://auth.yourdomain.com/`, `http://vault.yourdomain.com/`, `controlplane.yourdomain.com` etc.
-This must be configured with your DNS provider, and the specifics will vary greatly from one to the next. All entries
-should point to the IP address of the Kubernetes host, for example:
-
-![img.png](docs/images/dns.png)
-
-Each [component](#components) of JAD has its own HTTP route (Kubernetes replacement for Ingress routes), so it may be
-advisable to define DNS subdomains for each of them, for example:
-
-- Control plane: `https://cp.yourdomain.com/` -> 194.123.456.88
-- Identity Hub: `https://ih.yourdomain.com/` -> 194.123.456.88
-- Keycloak: `https://auth.yourdomain.com/` -> 194.123.456.88
-- Vault: `https://vault.yourdomain.com/` -> 194.123.456.88
-- etc.
-
-Where `194.178.218.88` is the IP address of the Kubernetes host running MetalLB (or similar).
-
-_In actual production deployments, these individual hostnames, and potentially also individual IP addresses, would be
-necessary to isolate security domains and prevent unauthorized access or privilege escalation._
-
-### Tune Traefik gateway controller
-
-By default, Traefik binds to port 80 and 443 on the host machine. This is useful to enable clean URLs like
-`http://tm.yourdomain.com/api/v1alpha1/cells` etc. without any ports. However, some Linux distributions don't allow
-binding to well-defined ports to non-root users.
-
-If that is the case (check Traefik's logs), adding the following snippet to `values.yaml` will fix the problem:
-
-```yaml
-hostNetwork: true
-securityContext:
-  capabilities:
-    drop: [ ALL ]
-    add: [ NET_BIND_SERVICE ]
-  readOnlyRootFilesystem: true
-  runAsGroup: 0
-  runAsNonRoot: false
-  runAsUser: 0
-```
-
-### Create Bruno Environment
-
-Some of the URL paths used in Bruno are hard coded to `localhost` in a Bruno environment named `KinD Local`. This is
-tailored to running JAD on a local KinD cluster. To make the collection usable for a remote deployment, we recommend
-duplicating the collection and replace the `localhost` references with the DNS names of the services.
-
-Create another environment to suit your setup:
-
-![img.png](docs/images/bruno_custom_env.png)
-
-### Update deployment manifests
-
-in [keycloak.yaml](k8s/base/keycloak.yaml) and [vault.yaml](k8s/base/vault.yaml), update the `hostnames` fields in the
-`HTTPRoute` resources to match your DNS:
-
-```yaml
-spec:
-  parentRefs:
-    - name: edcv-gateway
-      kind: Gateway
-      sectionName: http
-  hostnames:
-    - keycloak.localhost
-    - auth.yourdomain.com
-```
-
-Do this for all `HTTPRoute` declarations in all components' manifests. The `hostnames` field should contain entries
-matching your DNS subdomains that you have also used to create the new Bruno environment.
-
-### Update the Keycloak realm
-
-In `k8s/base/keycloak.yaml`, find the line that says:
-
-```text
-"bound_issuer": "http://vault.localhost/realms/edcv"
-```
-
-and replace with
-
-```text
-"bound_issuer": "http://vault.yourdomain.com/realms/edcv"
-```
-
-This is crucial for Vault authentication to work properly.
-
-### Tune readiness probes
-
-We've set up the readiness probes fairly tight, to avoid long wait times on local KinD clusters. However, in some
-Kubernetes
-clusters, these may need to be tuned to allow for longer periods and/or larger failure thresholds. In particular,
-KeyCloak takes a long time to start up, sometimes several minutes depending on the hardware.
-If the thresholds are too tight, then Keycloak may get hung up in endless restart loops: Kubernetes kills the pod
-before it reaches a healthy state.
-
-To start, edit the `readinessProbe` section of the `keycloak` deployment manifest:
-
-```yaml
-# keycloak.yaml
-readinessProbe:
-  httpGet:
-    path: /health/ready
-    port: 9000
-  initialDelaySeconds: 30 # changed
-  periodSeconds: 10 # changed
-  successThreshold: 1
-  failureThreshold: 15 # changed
-livenessProbe:
-  httpGet:
-    path: /health/live
-    port: 9000
-  initialDelaySeconds: 30 # changed
-  periodSeconds: 10 # changed
-  successThreshold: 1
-  failureThreshold: 15 # changed
-```
-
-## Using the OpenAPI specifications
-
-We've included [OpenAPI specifications](./openapi) for all JAD components that expose REST APIs. We'll call those APIs
-"Administration APIs" and you can read more about them in
-the [EDC-V documentation](https://github.com/eclipse-edc/Virtual-Connector/blob/main/docs/administration_api.md).
-
-Please note, that we've taken the liberty of curating the list of APIs to what we consider to be the most relevant for
-the end-user. We have also prioritized deployment resilience, ensuring that it is difficult for users to accidentally
-misconfigure their JAD deployment to the point of failure.
-
-However, the complete specifications for each component, including modifying and thus potentially dangerous actions, can
-be found in the respective GitHub repositories.
-
-### Intended audience
-
-The curated OpenAPI specifications are intended for developers who have graduated beyond the use of
-the [Bruno collection](./requests/EDC-V%20Onboarding) and want to integrate JAD components into their own applications
-such as ERP systems, web UIs or other applications.
-
-Another important use case is to generate server stubs for client applications to make testing independent of the JAD
-deployment, and thus easier and more repeatable.
-
-### Swagger UI vs generated clients
-
-Unfortunately, Keycloak rejects authorization requests from Swagger UI due to CORS restrictions. Therefore, we recommend
-using these OpenAPI files to manually implement or generate client libraries for your programming language of choice.
-One popular possibility to do that is
-the [OpenAPI Generator project](https://github.com/OpenAPITools/openapi-generator).
-
-The generator can be run in an ephemeral Docker container (amongst _many_ other options) to generate client stubs for
-various languages. Below are some examples of how to use it, myriads more are available on the project's GitHub page.
-
-**Example 1: generate a Java client using OkHttp and Gson**:
-
-```shell
-docker run --rm -v "${PWD}/openapi:/local" openapitools/openapi-generator-cli generate \
-    -i /local/identity-api.yaml \
-    -g java \
-    --library okhttp-gson \
-    -o /local/out/java
-```
-
-**Example 2: generate a TypeScript client using Angular**:
-
-```shell
-docker run --rm -v "${PWD}/openapi:/local" openapitools/openapi-generator-cli generate \
-    -i /local/identity-api.yaml \
-    -g typescript-angular \
-    -o /local/out/ts
-```
-
-**Example 3: generate a Go client**:
-
-```shell
-docker run --rm -v "${PWD}/openapi:/local" openapitools/openapi-generator-cli generate \
-    -i /local/identity-api.yaml \
-    -g go \
-    -o /local/out/go
-```
-
-Client code generators typically don't hard-wire authentication and authorization logic into the generated client code,
-so you'll need to add it manually. This is expected, and the generated code often contains examples of how to do it.
-Please consult the generators' documentation for more information.
-
-Please be aware that as with all generated code, the generated client stubs should be seen as a starting point, and
-adjustments and tweaks are almost certainly necessary to make it work in your application.
-
-The JAD project does not provide any official support for client libraries, nor are we responsible for any issues that
-may arise from using them, nor do we officially endorse any particular client library or generator thereof.

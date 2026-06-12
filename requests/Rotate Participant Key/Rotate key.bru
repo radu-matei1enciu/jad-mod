@@ -1,0 +1,30 @@
+meta {
+  name: Rotate key
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{identityHubUrl}}/participants/{{participantContextId}}/keypairs/{{active_key_id}}/rotate
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "keyGeneratorParams": {
+      "algorithm": "eddsa",
+      "curve": "ed25519"    
+    },
+    "keyId": "{{participantIdentifier}}#{{$randomUUID}}",
+    "privateKeyAlias": "{{$randomUUID}}" 
+  }
+  
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+}

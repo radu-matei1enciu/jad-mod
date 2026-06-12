@@ -1,0 +1,67 @@
+meta {
+  name: 24 Get Catalog
+  type: http
+  seq: 24
+}
+
+post {
+  url: {{cpBaseUrl}}/v5beta/participants/{{consumer_context_id}}/catalog/request
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "@context": [
+      "https://w3id.org/edc/connector/management/v2"
+    ],
+    "@type": "CatalogRequest",
+    "protocol": "http-dsp-profile-2025-1",
+    "counterPartyAddress": "http://controlplane.edc-v.svc.cluster.local:8082/api/dsp/{{provider_context_id}}/http-dsp-profile-2025-1",
+    "counterPartyId": "{{provider_did}}"
+  }
+}
+
+script:post-response {
+  try {
+      const json = res.getBody();
+  
+      const assetId = bru.getVar("ASSET_CERT_ID") || "cert_asset";
+      console.log('Looking for asset ID:', assetId);
+      console.log('Datasets found:', JSON.stringify((json.dataset || []).map(d => d["@id"])));
+  
+      const datasets = json.dataset || [];
+      const firstDataset = datasets.filter(dataset => dataset["@id"] === assetId)[0] || {};
+      console.log('Matched dataset:', JSON.stringify(firstDataset["@id"]));
+  
+      const policies = firstDataset.hasPolicy || [];
+      const firstPolicy = policies[0] || {};
+      const policyId = firstPolicy['@id'];
+  
+      console.log('Policy ID found:', policyId);
+  
+      if (policyId && typeof policyId === 'string') {
+          bru.setEnvVar('POLICY_ID', policyId);
+          bru.setVar('POLICY_ID', policyId);
+          bru.setVar("DATASET_ID", assetId);
+          console.log('Offer ID (POLICY_ID) is:', policyId);
+      } else {
+          console.warn('Policy ID not found in response at dataset[0].hasPolicy[0]["@id"]');
+      }
+  
+      test('Policy ID is present and stored', function () {
+          expect(policyId, 'Policy ID should exist').to.be.a('string').and.not.empty;
+      });
+  
+  } catch (e) {
+      console.error('Failed to parse response or set POLICY_ID:', e);
+      test('Response is valid JSON', function () {
+          throw e;
+      });
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}
