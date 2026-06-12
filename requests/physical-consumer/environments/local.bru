@@ -1,0 +1,29 @@
+vars {
+  consumerCpBaseUrl: http://localhost:9081/api/mgmt
+  consumerParticipantId: physical-consumer
+  consumerParticipantContextId: physical-consumer
+  consumerDid: did:web:identityhub.consumer.svc.cluster.local%3A7083:physical-consumer
+
+  virtualCpBaseUrl: http://localhost:18081/api/mgmt
+
+  keycloakTokenUrl: http://localhost:8180/realms/edcv/protocol/openid-connect/token
+  keycloakClientId: admin
+  keycloakClient: edc-v-admin-secret
+  keycloakClientSecret: edc-v-admin-secret
+
+  preferredProviderParticipantId: __auto__
+  providerFilter: __auto__
+  providerIndexcomp1: 0
+  providerIndexcomp2: 1
+  providerIndexcomp3: 2
+
+  providerParticipantId: __auto__
+  providerDid: __auto__
+  providerProtocolUrl: __auto__
+
+  providerDidTemplate: did:web:identityhub.edc-v.svc.cluster.local%3A7083:{participantId}
+  providerProtocolUrlTemplate: http://controlplane.edc-v.svc.cluster.local:8082/api/dsp/{participantId}/2025-1
+
+  providerDataplaneK8sBaseUrl: http://dataplane.edc-v.svc.cluster.local:11002
+  providerDataplaneLocalBaseUrl: http://localhost:11002
+}

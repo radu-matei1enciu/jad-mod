@@ -1,0 +1,16 @@
+meta {
+  name: Get CEL expression
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{cpBaseUrl}}/api/mgmt/v5beta/celexpressions/{{CEL_EXPR_ID}}
+  body: json
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

@@ -1,0 +1,135 @@
+meta {
+  name: 02 Request Catalog Comp2
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{consumerCpBaseUrl}}/v5beta/participants/{{consumerParticipantContextId}}/catalog/request
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{accessToken}}
+  Content-Type: application/json
+  Accept: application/json
+}
+
+body:json {
+  {
+    "@context": [
+      "https://w3id.org/edc/connector/management/v2"
+    ],
+    "@type": "CatalogRequest",
+    "counterPartyAddress": "{{providerProtocolUrl}}",
+    "counterPartyId": "{{providerDid}}",
+    "protocol": "{{protocol}}",
+    "querySpec": {
+      "@type": "QuerySpec",
+      "offset": 0,
+      "limit": 50
+    }
+  }
+}
+
+script:pre-request {
+  if (!bru.getVar("accessToken")) {
+    throw new Error("Missing accessToken. Run 00 Get Management Token first.");
+  }
+
+  const virtualCpBaseUrl = bru.getEnvVar("virtualCpBaseUrl") || "http://localhost:18081/api/mgmt";
+  const providerIndex = Number(bru.getEnvVar("providerIndexcomp2") ?? 0);
+  const providerProtocolBaseUrl = bru.getEnvVar("providerProtocolBaseUrl") || "http://controlplane.edc-v.svc.cluster.local:8082/api/dsp";
+
+  const axios = require("axios");
+
+  const response = await axios.get(`${virtualCpBaseUrl}/v5beta/participants`, {
+    headers: {
+      "Authorization": "Bearer " + bru.getVar("accessToken"),
+      "Accept": "application/json"
+    }
+  });
+
+  const participants = response.data;
+
+  if (!Array.isArray(participants) || participants.length === 0) {
+    throw new Error("No virtual participants found.");
+  }
+
+  const selected = participants[providerIndex];
+  if (!selected) {
+    throw new Error("No participant at index " + providerIndex + ". Found: " + participants.length);
+  }
+
+  const providerParticipantId = selected["@id"] || selected.id;
+  const providerDid = selected.identity || selected["edc:identity"];
+  const providerProtocolUrl = `${providerProtocolBaseUrl}/${providerParticipantId}/2025-1`;
+
+  bru.setVar("providerParticipantId", providerParticipantId);
+  bru.setVar("providerDid", providerDid);
+  bru.setVar("providerProtocolUrl", providerProtocolUrl);
+
+  if (!bru.getVar("protocol")) {
+    bru.setVar("protocol", "dataspace-protocol-http:2025-1");
+  }
+}
+
+script:post-response {
+  const status = res.getStatus();
+  const raw = res.getBody();
+
+  let body;
+  try {
+    body = typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch (e) {
+    throw new Error("Could not parse catalog response as JSON");
+  }
+
+  if (status < 200 || status >= 300) {
+    throw new Error("Catalog request failed: " + JSON.stringify(body));
+  }
+
+  function asArray(value) {
+    if (!value) return [];
+    return Array.isArray(value) ? value : [value];
+  }
+
+  const datasets = asArray(
+    body["dataset"] ||
+    body["dcat:dataset"] ||
+    body["https://www.w3.org/ns/dcat#dataset"]
+  );
+
+  if (datasets.length === 0) {
+    throw new Error("No datasets found for Comp2.");
+  }
+
+  const dataset = datasets[0];
+  const assetId = dataset["@id"] || dataset["id"] || dataset["assetId"];
+  if (!assetId) throw new Error("Could not find assetId.");
+
+  bru.setVar("assetIdComp2", assetId);
+  bru.setVar("assetId", assetId);
+
+  const policies = asArray(
+    dataset["hasPolicy"] ||
+    dataset["odrl:hasPolicy"] ||
+    dataset["https://www.w3.org/ns/odrl/2/hasPolicy"]
+  );
+
+  if (policies.length === 0) throw new Error("Dataset has no policy/contract offer.");
+
+  const offerPolicy = policies[0];
+  const policyId = offerPolicy["@id"] || offerPolicy["id"];
+  if (!policyId) throw new Error("Could not find policyId.");
+
+  bru.setVar("policyIdComp2", policyId);
+  bru.setVar("policyId", policyId);
+  bru.setVar("offerId", policyId);
+  bru.setVar("offerPolicy", JSON.stringify(offerPolicy));
+
+  bru.setVar("providerParticipantIdComp2", bru.getVar("providerParticipantId"));
+  bru.setVar("providerDidComp2", bru.getVar("providerDid"));
+  bru.setVar("providerProtocolUrlComp2", bru.getVar("providerProtocolUrl"));
+}

@@ -1,0 +1,76 @@
+meta {
+  name: 05 Get Contract Negotiation By ID
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{consumerCpBaseUrl}}/v5beta/participants/{{consumerParticipantContextId}}/contractnegotiations/{{contractNegotiationId}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{accessToken}}
+  Accept: application/json
+}
+
+script:pre-request {
+  if (!bru.getVar("accessToken")) {
+    throw new Error("Missing accessToken. Run 00 Get Management Token first.");
+  }
+
+  if (!bru.getVar("consumerParticipantContextId")) {
+    throw new Error("Missing consumerParticipantContextId. It should be physical-consumer.");
+  }
+
+  if (!bru.getVar("contractNegotiationId")) {
+    throw new Error("contractNegotiationId is missing. Run 04 Initiate Contract Negotiation first.");
+  }
+}
+
+script:post-response {
+  const status = res.getStatus();
+  const raw = res.getBody();
+
+  let body;
+  try {
+    body = typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch (e) {
+    console.log("Raw response:", raw);
+    throw new Error("Could not parse negotiation response as JSON");
+  }
+
+  if (status < 200 || status >= 300) {
+    console.log("HTTP status:", status);
+    console.log("Negotiation error response:", JSON.stringify(body, null, 2));
+    throw new Error("Get contract negotiation failed");
+  }
+
+  console.log("Contract negotiation response:");
+  console.log(JSON.stringify(body, null, 2));
+
+  const state =
+    body.state ||
+    body["edc:state"];
+
+  console.log("Negotiation state:", state);
+
+  const contractAgreementId =
+    body.contractAgreementId ||
+    body["edc:contractAgreementId"] ||
+    body.agreementId ||
+    body["edc:agreementId"];
+
+  if (contractAgreementId) {
+    bru.setVar("contractAgreementId", contractAgreementId);
+    bru.setVar("CONTRACT_AGREEMENT_ID", contractAgreementId);
+    console.log("Saved contractAgreementId:", contractAgreementId);
+  }
+
+  if (state !== "FINALIZED") {
+    console.warn("Negotiation is not FINALIZED yet. Re-run this request until state is FINALIZED.");
+  } else {
+    console.log("Negotiation is FINALIZED. You can continue to 06 Get Contract Agreement.");
+  }
+}

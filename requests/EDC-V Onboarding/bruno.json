@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "EDC-V Onboarding",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}
